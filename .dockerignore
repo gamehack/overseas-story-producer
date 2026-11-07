@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git/
+.github/
+.venv/
+outputs/
+tests/
+__pycache__/
+*.pyc
+*.zip
+

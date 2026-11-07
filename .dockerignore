@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+secrets/
 .git/
 .github/
 .venv/
@@ -9,4 +10,3 @@ tests/
 __pycache__/
 *.pyc
 *.zip
-

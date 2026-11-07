@@ -32,11 +32,13 @@ def run(argv: list[str] | None = None) -> dict:
         period = canonical_period(args.period)
         case = load_case(os.getenv("DATABASE_URL", ""), args.story_id)
         system, prompt = author_prompt(case)
+        allow_private_http = os.getenv("OPENAI_COMPAT_ALLOW_PRIVATE_HTTP", "false").strip().lower() in {"1", "true"}
         model_result = generate_json(
             system, prompt,
             api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
             api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
             model=os.getenv("OPENAI_COMPAT_MODEL", ""),
+            allow_private_http=allow_private_http,
         )
         review_system, review_user = reviewer_prompt(case, model_result)
         review_result = generate_json(
@@ -44,6 +46,7 @@ def run(argv: list[str] | None = None) -> dict:
             api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
             api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
             model=os.getenv("OPENAI_COMPAT_MODEL", ""),
+            allow_private_http=allow_private_http,
         )
         item = build_artifact(case, period, model_result, review_result)
         # The output remains an artifact even when QA fails, for editor review.

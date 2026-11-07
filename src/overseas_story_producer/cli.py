@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+import time
 from pathlib import Path
 
 from .core import (ProductionError, author_prompt, build_artifact, canonical_period,
@@ -12,6 +14,19 @@ from .core import (ProductionError, author_prompt, build_artifact, canonical_per
 from .model import generate_json
 from .notion import NotionDraftWriter
 from .source import load_case
+
+
+def _review_cooldown_seconds() -> float:
+    # A successful author response can exhaust a provider's per-minute budget.
+    # Delay the independent review, but never automatically retry a failed call.
+    raw = os.getenv("OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS", "90").strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ProductionError("Invalid model review cooldown") from None
+    if not math.isfinite(seconds) or not 0 <= seconds <= 600:
+        raise ProductionError("Model review cooldown must be between 0 and 600 seconds")
+    return seconds
 
 
 def run(argv: list[str] | None = None) -> dict:
@@ -30,6 +45,7 @@ def run(argv: list[str] | None = None) -> dict:
 
     if args.command == "generate":
         period = canonical_period(args.period)
+        review_cooldown = _review_cooldown_seconds()
         case = load_case(os.getenv("DATABASE_URL", ""), args.story_id)
         system, prompt = author_prompt(case)
         allow_private_http = os.getenv("OPENAI_COMPAT_ALLOW_PRIVATE_HTTP", "false").strip().lower() in {"1", "true"}
@@ -41,6 +57,8 @@ def run(argv: list[str] | None = None) -> dict:
             allow_private_http=allow_private_http,
         )
         review_system, review_user = reviewer_prompt(case, model_result)
+        if review_cooldown:
+            time.sleep(review_cooldown)
         review_result = generate_json(
             review_system, review_user,
             api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),

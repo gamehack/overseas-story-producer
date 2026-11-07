@@ -53,3 +53,16 @@ overseas-story-producer submit --input outputs/2026-11-09.json --commit
 python -m pytest -q
 ```
 
+## 容器（手动运行，不开启定时任务）
+
+```bash
+docker build -t overseas-story-producer:local .
+# 由运维在硅谷服务器私有路径准备 .env 和 UID 10001 可写的输出目录。
+docker run --rm --env-file /opt/overseas-story-producer/.env \
+  --mount type=bind,src=/opt/overseas-story-producer/outputs,dst=/outputs \
+  overseas-story-producer:local generate \
+  --story-id '<case-uuid>' --period YYYY-MM-DD --output /outputs/YYYY-MM-DD.json
+```
+
+Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；首次模型、Supabase 和 Notion 端到端验收前不得启用任何定时任务。
+

@@ -8,7 +8,7 @@
 
 - Python 3.11+，`pip install -e '.[test]'`。
 - 单独创建 SELECT-only Postgres 角色，限定 `overseas_stories.stories`、`facts`、`story_localizations`、`localized_facts` 视图；通过 `DATABASE_URL` 连接 Supabase，推荐 TLS 验证。程序仍主动启动只读事务。
-- `OPENAI_COMPAT_BASE_URL`、`OPENAI_COMPAT_API_KEY`、`OPENAI_COMPAT_MODEL` 指向**已批准**的 OpenAI-compatible 模型服务（如现有 OmniRoute），不会自己创建新 Agent。
+- `OPENAI_COMPAT_BASE_URL`、`OPENAI_COMPAT_API_KEY`、`OPENAI_COMPAT_MODEL` 指向**已批准**的 OpenAI-compatible 模型服务（如现有 OmniRoute），不会自己创建新 Agent。URL 可写 `/v1` 基础地址或完整 `/v1/chat/completions`，程序不会重复追加路径。默认仅允许 HTTPS；若需要复用受控 Docker 私网中的 HTTP OmniRoute，须显式设 `OPENAI_COMPAT_ALLOW_PRIVATE_HTTP=true`，且目标主机必须是受允许的本地别名或私网 IP。公网 HTTP 始终被拒绝。
 - `NOTION_API_KEY` 只赋予选定内容父页面的插入权限，`NOTION_PARENT_PAGE_ID` 必须通过私有环境配置传入，仓库不包含真实页面 ID。
 - 不要把 `.env`、本地成稿 JSON 或数据库凭据提交到 GitHub。
 

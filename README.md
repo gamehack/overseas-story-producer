@@ -112,3 +112,8 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 The producer requests OpenAI-compatible Chat Completions with `stream=true` and `Accept: text/event-stream`. For SSE responses it concatenates `choices[].delta.content` chunks, ignores reasoning-only fields, and accepts the result only after the terminal `[DONE]` event. An interrupted or malformed stream fails closed and is never submitted to Notion. For compatible gateways that ignore the stream preference and return a regular JSON completion, the producer retains the non-streaming JSON response fallback. The same bounded response size and per-read HTTP timeout apply.
 
 Streaming is intended to let the client receive response bytes as they are generated, reducing idle time on the Cloudflare-proxied connection. It does **not** guarantee that a provider will emit its first token before Cloudflare's 125-second Free-plan proxy read timeout. The first post-merge E2E remains the required live verification; no model request is made by unit tests or CI.
+
+
+### E2E QA failure diagnostics
+
+When the full E2E reaches the editorial QA gate but does not pass, it writes a **diagnostic-only** Notion page inside the dedicated `M7 自动化验收测试区`. That page contains scores, issue labels, and the reviewer's unsupported-claim excerpts so the failure can be diagnosed without publishing or exposing the full manuscript in public GitHub logs. It is explicitly marked `QA_FAILED_DIAGNOSTIC_ONLY`; it is not a pending article, contains no full article body, has no READY marker, and is never sent to CMS or WeChat. The workflow still exits as failed. Only an artifact that passes both structural and independent editorial gates can be submitted as a `CREATED_PENDING_REVIEW` article page.

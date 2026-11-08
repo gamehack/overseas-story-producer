@@ -54,6 +54,11 @@ def run(argv: list[str] | None = None) -> dict:
     s.add_argument("--e2e-test", action="store_true", help="Create the draft only inside the dedicated M7 E2E test area")
     v = sub.add_parser("inspect", help="Inspect artifact quality without external calls")
     v.add_argument("--input", type=Path, required=True)
+    d = sub.add_parser("diagnose", help="Write failed QA details only to the isolated E2E Notion area")
+    d.add_argument("--input", type=Path, required=True)
+    d.add_argument("--run-id", required=True)
+    d.add_argument("--commit", action="store_true")
+    d.add_argument("--e2e-test", action="store_true")
     args = parser.parse_args(argv)
 
     if args.command == "generate":
@@ -115,6 +120,12 @@ def run(argv: list[str] | None = None) -> dict:
             raise ValueError("Artifact must be object")
     except (OSError, ValueError):
         raise ProductionError("Cannot parse input artifact") from None
+    if args.command == "diagnose":
+        with NotionDraftWriter(os.getenv("NOTION_API_KEY", ""),
+                               os.getenv("NOTION_PARENT_PAGE_ID", "")) as writer:
+            return writer.create_e2e_qa_diagnostic(
+                item, run_id=args.run_id, commit=args.commit, e2e_test=args.e2e_test,
+            )
     validate_artifact(item)
     if args.command == "inspect":
         return {"status": "VALID_PENDING_ARTIFACT", "qa": item["qa"],

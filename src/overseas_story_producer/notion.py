@@ -5,7 +5,7 @@ from uuid import UUID
 
 import httpx
 
-from .core import ProductionError, validate_artifact
+from .core import ProductionError, canonical_period, validate_artifact
 
 
 NOTION_API = "https://api.notion.com/v1"
@@ -181,6 +181,91 @@ class NotionDraftWriter:
             if not isinstance(cursor, str) or not cursor or cursor in seen:
                 raise ProductionError("Notion pagination cannot be trusted")
             seen.add(cursor)
+
+
+    def create_e2e_qa_diagnostic(self, artifact: dict, *, run_id: str,
+                                 commit: bool = False,
+                                 e2e_test: bool = False) -> dict:
+        """Write QA failure details only to the isolated E2E area, never as an article."""
+        if not commit or not e2e_test:
+            raise ProductionError("QA diagnostics require explicit E2E commit mode")
+        if not isinstance(artifact, dict):
+            raise ProductionError("Invalid QA diagnostic artifact")
+        if artifact.get("status") != "PENDING_HUMAN_REVIEW" or artifact.get("publish_ready") is not False:
+            raise ProductionError("QA diagnostic requires a non-publishable pending artifact")
+        qa = artifact.get("qa")
+        review = artifact.get("editorial_review")
+        if not isinstance(qa, dict) or qa.get("passes_automatic_checks") is not False:
+            raise ProductionError("QA diagnostic is allowed only for a failed QA gate")
+        if not isinstance(review, dict):
+            raise ProductionError("Independent review details are missing")
+        claims = review.get("unsupported_claims")
+        issues = review.get("issues")
+        hard_fail = review.get("hard_fail")
+        if (not isinstance(claims, list) or not all(isinstance(x, str) and 0 < len(x) <= 1000 for x in claims)
+                or len(claims) > 10
+                or not isinstance(issues, list) or not all(isinstance(x, str) and 0 < len(x) <= 500 for x in issues)
+                or len(issues) > 20 or type(hard_fail) is not bool):
+            raise ProductionError("QA diagnostic fields failed validation")
+        period = canonical_period(artifact.get("period", ""))
+        try:
+            story_id = str(UUID(str(artifact.get("story_id", ""))))
+        except (ValueError, TypeError, AttributeError):
+            raise ProductionError("Invalid story ID in QA diagnostic") from None
+        if not isinstance(run_id, str) or not run_id.isdigit() or len(run_id) > 20:
+            raise ProductionError("Invalid GitHub run ID")
+        auto_issues = qa.get("issues", [])
+        if not isinstance(auto_issues, list) or not all(isinstance(x, str) and len(x) <= 200 for x in auto_issues):
+            raise ProductionError("Invalid structural QA issue list")
+        score = qa.get("score")
+        editorial_score = qa.get("editorial_score")
+        if (type(score) is not int or not 0 <= score <= 100
+                or type(editorial_score) is not int or not 0 <= editorial_score <= 100):
+            raise ProductionError("Invalid QA score in diagnostic artifact")
+        title = f"E2E QA诊断｜{period}｜run-{run_id}"
+        blocks = [
+            _block("heading_1", "自动化质检未通过｜仅供排障，不是文章草稿"),
+            _block("paragraph", "状态：QA_FAILED_DIAGNOSTIC_ONLY。此页不是待发布文章，不得进入 READY、CMS 或微信公众号发布流程。"),
+            _block("paragraph", f"GitHub Actions Run：{run_id}"),
+            _block("paragraph", f"案例 UUID：{story_id}"),
+            _block("paragraph", f"来源：{str(artifact.get('original_url', ''))[:1000]}"),
+            _block("paragraph", f"结构质检：{score}/100；结构问题数：{len(auto_issues)}"),
+            _block("paragraph", f"独立审稿：{editorial_score}/100；审稿问题数：{len(issues)}；未获支持声明数：{len(claims)}；Hard Fail：{hard_fail}"),
+        ]
+        blocks.extend(_block("paragraph", f"结构问题：{issue}") for issue in auto_issues)
+        blocks.extend(_block("paragraph", f"审稿意见：{issue}") for issue in issues)
+        blocks.extend(_block("paragraph", f"未获证据支持的声明 {index}: {claim}")
+                      for index, claim in enumerate(claims, start=1))
+        if len(blocks) > 40:
+            raise ProductionError("QA diagnostic exceeds Notion child block limit")
+        original_parent = self.parent_id
+        try:
+            self.parent_id = self._ensure_e2e_test_parent()
+            self._ensure_unique(title)
+            payload = {
+                "parent": {"type": "page_id", "page_id": self.parent_id},
+                "properties": {"title": {"type": "title", "title": _rich(title)}},
+                "children": blocks,
+            }
+            try:
+                response = self.client.post("/pages", json=payload)
+                if response.status_code not in (200, 201) or len(response.content) > 200_000:
+                    raise ProductionError("Notion QA diagnostic creation failed; outcome may be unknown")
+                page = response.json()
+                page_id = str(UUID(page["id"]))
+                parent = page.get("parent", {})
+                if (parent.get("type") != "page_id" or
+                        str(UUID(parent.get("page_id", ""))) != self.parent_id):
+                    raise ValueError("Wrong QA diagnostic parent")
+            except (httpx.HTTPError, KeyError, ValueError, TypeError):
+                raise ProductionError("Notion QA diagnostic outcome UNKNOWN; inspect the M7 E2E test area before retrying") from None
+            return {"status": "CREATED_QA_FAILURE_DIAGNOSTIC",
+                    "page_id": page_id, "url": page.get("url", ""),
+                    "title": title, "parent": self.parent_id,
+                    "e2e_test": True, "diagnostic_only": True}
+        finally:
+            self.parent_id = original_parent
+
 
     def create_pending_page(self, artifact: dict, *, commit: bool = False,
                             e2e_test: bool = False) -> dict:

@@ -161,9 +161,26 @@ jobs:
               summary.write("\n".join(lines) + "\n")
           print("M7 safe QA diagnostics: " + json.dumps(safe, ensure_ascii=False))
           if not safe["combined_gate_passed"]:
-              raise SystemExit("Artifact failed automatic checks; see sanitized QA summary above.")
+              raise SystemExit(10)
 
           PY
+          qa_status=$?
+          if [ "$qa_status" -eq 10 ]; then
+            python -m overseas_story_producer.cli diagnose \
+              --input "$artifact" --run-id "$GITHUB_RUN_ID" --commit --e2e-test \
+              > "$RUNNER_TEMP/m7-notion-diagnostic-result.json"
+            python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "m7-notion-diagnostic-result.json").read_text())
+          if result.get("status") != "CREATED_QA_FAILURE_DIAGNOSTIC" or result.get("diagnostic_only") is not True:
+              raise SystemExit("Isolated Notion QA diagnostic was not created")
+          print("Isolated Notion QA diagnostic created; no article page was submitted.")
+          PY
+            echo "QA gate FAIL: an isolated diagnostic-only page was written to M7 自动化验收测试区; no article, READY marker, CMS or WeChat action." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           python -m overseas_story_producer.cli inspect \
             --input "$artifact" > "$RUNNER_TEMP/m7-inspect-result.json"
           python -m overseas_story_producer.cli submit \

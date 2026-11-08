@@ -84,6 +84,9 @@ def test_author_and_reviewer_prompts_forbid_customer_type_and_causal_inference(c
     assert "个人订阅" in reviewer_system
     assert "时间或因果关系" in reviewer_system
     assert "中英混杂" in author_system
+    assert "不承担独立事实核验" in author_system
+    assert "不是独立事实核验" in reviewer_system
+    assert "仅用于真正严重的编造" in reviewer_system
 
 
 def test_valid_story_and_artifact(case, model_response, model_review):
@@ -129,10 +132,41 @@ def test_missing_editorial_review_cannot_submit(case, model_response):
         validate_artifact(item)
 
 
-def test_unverified_claims_fail_editorial_gate(case, model_response, model_review):
-    model_review["unsupported_claims"] = ["未注明出处的收入数字"]
+def test_minor_source_deviations_are_warnings_and_allow_human_review(case, model_response, model_review):
+    model_review["unsupported_claims"] = ["太阳能板安装在屋顶", "六层菜单"]
+    model_review["issues"] = ["请把六层菜单改为六个不同菜单"]
+    item = build_artifact(case, "2026-11-09", model_response, model_review)
+    assert item["qa"]["passes_automatic_checks"]
+    assert item["qa"]["editorial_warnings"] == ["太阳能板安装在屋顶", "六层菜单"]
+    assert item["status"] == "PENDING_HUMAN_REVIEW"
+    assert item["publish_ready"] is False
+    validate_artifact(item)
+
+
+def test_major_fabrication_is_still_blocked(case, model_response, model_review):
+    model_review["unsupported_claims"] = ["虚构的离婚经历"]
+    model_review["hard_fail"] = True
+    model_review["hard_fail_reason"] = "虚构婚姻破裂这一重大人生事件"
     item = build_artifact(case, "2026-11-09", model_response, model_review)
     assert not item["qa"]["passes_automatic_checks"]
+    assert any("Hard failure" in issue for issue in item["qa"]["editorial_issues"])
+    with pytest.raises(ProductionError, match="automatic"):
+        validate_artifact(item)
+
+
+def test_major_fabrication_requires_explicit_reason(case, model_response, model_review):
+    model_review["hard_fail"] = True
+    model_review["hard_fail_reason"] = " "
+    item = build_artifact(case, "2026-11-09", model_response, model_review)
+    assert not item["qa"]["passes_automatic_checks"]
+
+
+def test_warning_integrity_is_checked_before_submission(case, model_response, model_review):
+    model_review["unsupported_claims"] = ["屋顶安装位置无证据"]
+    item = build_artifact(case, "2026-11-09", model_response, model_review)
+    item["qa"]["editorial_warnings"] = []
+    with pytest.raises(ProductionError, match="editorial review"):
+        validate_artifact(item)
 
 
 def test_bad_editorial_schema_fails(case, model_response, model_review):

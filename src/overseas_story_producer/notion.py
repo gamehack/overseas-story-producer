@@ -182,6 +182,43 @@ class NotionDraftWriter:
                 raise ProductionError("Notion pagination cannot be trusted")
             seen.add(cursor)
 
+    def _create_editorial_notes(self, artifact: dict, article_id: str) -> dict | None:
+        """Keep review notes adjacent to, but separate from, the publishable article."""
+        notes = artifact.get("qa", {}).get("editorial_issues", [])
+        if not notes:
+            return None
+        if (not isinstance(notes, list) or len(notes) > 20 or
+                not all(isinstance(note, str) and 0 < len(note) <= 1000 for note in notes)):
+            raise ProductionError("Editorial review notes exceed safe bounds")
+        title = f"M7 编辑备注｜{artifact['period']}｜{article_id}"
+        blocks = [
+            _block("heading_1", "内部编辑备注｜不是文章正文"),
+            _block("paragraph", "仅供人工审阅，不得添加 READY、进入 CMS 或微信公众号发布流程。"),
+            _block("paragraph", f"关联待审文章 ID：{article_id}"),
+            _block("paragraph", f"独立审稿：{artifact['qa']['editorial_score']}/100"),
+        ]
+        blocks.extend(_block("paragraph", f"编辑提醒 {i}：{note}")
+                      for i, note in enumerate(notes, 1))
+        payload = {
+            "parent": {"type": "page_id", "page_id": self.parent_id},
+            "properties": {"title": {"type": "title", "title": _rich(title)}},
+            "children": blocks,
+        }
+        try:
+            response = self.client.post("/pages", json=payload)
+            if response.status_code not in (200, 201) or len(response.content) > 100_000:
+                raise ProductionError("Editorial note creation failed after article creation; outcome may be unknown")
+            page = response.json()
+            note_id = str(UUID(page["id"]))
+            parent = page.get("parent", {})
+            if (parent.get("type") != "page_id" or
+                    str(UUID(parent.get("page_id", ""))) != self.parent_id):
+                raise ValueError("Wrong note parent")
+        except (httpx.HTTPError, KeyError, ValueError, TypeError):
+            # The article already exists; never retry an uncertain Notion write.
+            raise ProductionError("Editorial note outcome UNKNOWN after article creation; inspect Notion before retrying") from None
+        return {"page_id": note_id, "url": page.get("url", ""), "title": title}
+
 
     def create_e2e_qa_diagnostic(self, artifact: dict, *, run_id: str,
                                  commit: bool = False,
@@ -304,9 +341,11 @@ class NotionDraftWriter:
                 # Never auto-retry a POST; an ambiguous response must be inspected.
                 target = "M7 E2E test area" if e2e_test else "the 07 root"
                 raise ProductionError(f"Notion outcome UNKNOWN; inspect {target} before retrying") from None
+            review_note = self._create_editorial_notes(artifact, str(page["id"]))
             return {"status": "CREATED_PENDING_REVIEW", "page_id": page["id"],
                     "url": page.get("url", ""), "title": artifact["notion_title"],
-                    "parent": self.parent_id, "e2e_test": e2e_test}
+                    "parent": self.parent_id, "e2e_test": e2e_test,
+                    "review_note": review_note}
         finally:
             self.parent_id = original_parent
 

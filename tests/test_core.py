@@ -1,12 +1,36 @@
 import copy
 import hashlib
+import json
 
 import pytest
 
 from overseas_story_producer.core import (
     ProductionError, author_prompt, build_artifact, canonical_period,
-    evaluate, validate_artifact,
+    evaluate, reviewer_prompt, validate_artifact,
 )
+
+
+def test_reviewer_receives_same_archived_evidence_as_author(case, model_response):
+    _, author_user = author_prompt(case)
+    reviewer_system, reviewer_user = reviewer_prompt(case, model_response)
+
+    author_evidence = json.loads(author_user.split("\n", 1)[1])
+    reviewer_evidence = json.loads(reviewer_user)
+
+    # The reviewer must receive every evidence source available to the author.
+    for key in (
+        "case_id", "original_title", "chinese_title", "source_url",
+        "chinese_synopsis", "original_excerpt", "facts",
+    ):
+        assert reviewer_evidence[key] == author_evidence[key]
+
+    assert reviewer_evidence["manuscript"] == {
+        "title": model_response["title"],
+        "body_markdown": model_response["body_markdown"],
+    }
+    assert "中文摘要" in reviewer_system
+    assert "原文摘录" in reviewer_system
+    assert "不得仅因某句未出现在结构化 facts 数组中" in reviewer_system
 
 
 def test_valid_story_and_artifact(case, model_response, model_review):

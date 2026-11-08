@@ -44,6 +44,7 @@ def _model_timeout_seconds() -> float:
 def run(argv: list[str] | None = None) -> dict:
     parser = argparse.ArgumentParser(description="QJAI independent overseas-story producer")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("plan", help="Read-only select next case and serial for scheduled production")
     g = sub.add_parser("generate", help="Generate a local pending-review artifact")
     g.add_argument("--story-id", required=True)
     g.add_argument("--issue-number", required=True, help="Publication issue, e.g. 01; never a date")
@@ -60,6 +61,13 @@ def run(argv: list[str] | None = None) -> dict:
     d.add_argument("--commit", action="store_true")
     d.add_argument("--e2e-test", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.command == "plan":
+        from .automation import plan_next
+        return plan_next(database_url=os.getenv("DATABASE_URL", ""),
+                         notion_token=os.getenv("NOTION_API_KEY", ""),
+                         notion_parent_id=os.getenv("NOTION_PARENT_PAGE_ID", ""),
+                         priority_ids=os.getenv("M7_PRIORITY_STORY_IDS", ""))
 
     if args.command == "generate":
         issue_number = canonical_issue_number(args.issue_number)

@@ -1,0 +1,115 @@
+name: Overseas Stories weekly pending-review production
+
+on:
+  schedule:
+    # Collector/index refresh runs Monday 03:30 Beijing; allow a buffer.
+    - cron: '45 6 * * 1'
+      timezone: Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Plan without writing, or produce one pending-review Notion draft
+        type: choice
+        required: true
+        default: plan
+        options: [plan, submit]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overseas-stories-production
+  cancel-in-progress: false
+
+jobs:
+  produce:
+    # A separate, explicit enablement protects against unexpected model costs
+    # and writes to the formal 07 Notion root on workflow merge.
+    if: ${{ vars.M7_PRODUCTION_ENABLED == 'true' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'plan') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: m7-integration
+    env:
+      DATABASE_URL: ${{ secrets.M7_DATABASE_URL }}
+      NOTION_API_KEY: ${{ secrets.M7_NOTION_API_KEY }}
+      NOTION_PARENT_PAGE_ID: ${{ secrets.M7_NOTION_PARENT_PAGE_ID }}
+      M7_SUPABASE_CA_PEM: ${{ secrets.M7_SUPABASE_CA_PEM }}
+      M7_PRIORITY_STORY_IDS: ${{ vars.M7_PRIORITY_STORY_IDS }}
+      OPENAI_COMPAT_BASE_URL: https://omniroute.qjai.org/v1
+      OPENAI_COMPAT_API_KEY: ${{ secrets.M7_OMNIROUTE_API_KEY }}
+      OPENAI_COMPAT_MODEL: ${{ vars.M7_E2E_MODEL || 'MiniMax-M3' }}
+      OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS: '90'
+      OPENAI_COMPAT_TIMEOUT_SECONDS: '120'
+      OPENAI_COMPAT_ALLOW_PRIVATE_HTTP: 'false'
+      PGSSLROOTCERT: /tmp/m7-supabase-ca.pem
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate private configuration
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from uuid import UUID
+          required = ("DATABASE_URL", "NOTION_API_KEY", "NOTION_PARENT_PAGE_ID", "M7_SUPABASE_CA_PEM")
+          absent = [name for name in required if not os.getenv(name)]
+          if absent:
+              raise SystemExit("Missing configuration names: " + ", ".join(absent))
+          uri = os.environ["DATABASE_URL"].lower()
+          if "sslmode=verify-full" not in uri or "sslrootcert=" in uri:
+              raise SystemExit("Use portable TLS verify-full DATABASE_URL with separate CA")
+          UUID(os.environ["NOTION_PARENT_PAGE_ID"])
+          target = Path(os.environ["PGSSLROOTCERT"])
+          target.write_text(os.environ["M7_SUPABASE_CA_PEM"], encoding="ascii")
+          target.chmod(0o600)
+          PY
+      - name: Install producer
+        run: python -m pip install .
+      - name: Read-only planning
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m overseas_story_producer.cli plan > "$RUNNER_TEMP/production-plan.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          plan = json.loads((Path(os.environ["RUNNER_TEMP"]) / "production-plan.json").read_text())
+          if plan["status"] not in {"PLANNED", "SKIPPED"}:
+              raise SystemExit("Unexpected plan result")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write("ready=" + ("true" if plan["status"] == "PLANNED" else "false") + "\n")
+          print("Production plan: " + plan["status"])
+          if plan["status"] == "SKIPPED":
+              print("Reason: " + plan["reason"])
+          PY
+      - name: Create exactly one unapproved Notion draft
+        if: ${{ steps.plan.outputs.ready == 'true' && (github.event_name == 'schedule' || inputs.mode == 'submit') && vars.M7_PRODUCTION_ENABLED == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          plan = json.loads((Path(os.environ["RUNNER_TEMP"]) / "production-plan.json").read_text())
+          artifact = str(Path(os.environ["RUNNER_TEMP"]) / "production-article.json")
+          # Never echo a manuscript or model response into public Actions logs.
+          def call(*args):
+              p = subprocess.run([sys.executable, "-m", "overseas_story_producer.cli", *args],
+                                 capture_output=True, text=True)
+              if p.returncode:
+                  raise SystemExit("Production stage failed; private artifact not published. Check QA/connection with an authorized operator.")
+              return json.loads(p.stdout)
+          result = call("generate", "--story-id", plan["story_id"],
+                        "--issue-number", plan["issue_number"], "--output", artifact)
+          if result.get("qa", {}).get("passes_automatic_checks") is not True:
+              raise SystemExit("Automatic quality gate failed; no Notion write")
+          call("inspect", "--input", artifact)
+          receipt = call("submit", "--input", artifact, "--commit")
+          if receipt.get("status") != "CREATED_PENDING_REVIEW" or receipt.get("e2e_test") is not False:
+              raise SystemExit("Unexpected Notion result; reconcile before any retry")
+          print("Created one PENDING_HUMAN_REVIEW Notion story; no READY or channel delivery")
+          PY

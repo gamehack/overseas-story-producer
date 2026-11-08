@@ -2,7 +2,18 @@
 
 此仓库只负责将 `overseas_stories` 中的**中文结构化案例与证据**整理成中文人物故事，并送到 Notion `07 · 海外创业志` 下供人工审核。
 
-**边界：** `qjai-overseas-stories` 继续独立负责采集/翻译/结构化入库；本项目不写数据库、不创建微信公众号/CMS 草稿、不调用微信公众号/CMS API、不写 READY 标记、不定义生产定时任务。`mp-publisher`、`cms-publisher` 仍是彼此独立的投递器。
+**边界：** `qjai-overseas-stories` 继续独立负责采集/翻译/结构化入库；本项目不写数据库、不创建微信公众号/CMS 草稿、不调用微信公众号/CMS API、不写 READY 标记。`mp-publisher`、`cms-publisher` 仍是彼此独立的投递器。
+
+## M8 常规自动生产（人工审批不变）
+
+GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次，默认由仓库变量 `M7_PRODUCTION_ENABLED=true` 才启用。首次合并不会自动写 Notion。手动 dispatch 的 `mode=plan` 只读，`mode=submit` 在该变量开启后才真正生产。
+
+1. `overseas-story-producer plan` 读取 `overseas_stories` 中评分不低于 70、至少有 5 条中文本地化事实、`review_status=new` 的候选；从正式 Notion 07 一级页读取已有期号、故事 UUID 与 READY 状态，选未用过的最高分案例，自动分配连续的 `02`、`03` 等期号。
+2. 每次最多生产 **1 篇**，最多积压 **2 篇** 未 READY 的待审文章；缺号、重复期号、重复故事、历史文章缺少案例 UUID 时安全退出，不自动修复或补号。可用 `M7_PRIORITY_STORY_IDS`（逗号分隔 UUID，GitHub Variable）优先排序编辑选题；未设置时按候选评分和 UUID 稳定排序。
+3. 两次模型请求和独立质量检查通过后才写 Notion「待人工验收」文章，必要的编辑提醒单独成页。**不会自动添加 READY，不会触发 CMS 或微信，不会自动公开发表。**若模型限流/超时、QA 未通过、Notion POST 回执不确定，任务直接失败，不盲目重试。
+4. 继续复用 `m7-integration` 环境中已有的 `M7_DATABASE_URL`、`M7_SUPABASE_CA_PEM`、`M7_NOTION_API_KEY`、`M7_NOTION_PARENT_PAGE_ID`、`M7_OMNIROUTE_API_KEY`。数据库仍必须是只读角色、`sslmode=verify-full`；运行日志不输出正文或密钥。`M7_E2E_ACTIVE` 保持关闭，不恢复旧的临时测试页。
+
+合并并通过 CI 后，先在 Actions 上手动选择 `mode=plan` 核对只读选题与期号，再由负责人显式启用 `M7_PRODUCTION_ENABLED=true`。首次自然周运行之后验收真实日志和 Notion 页面，不能以 PR 测试代替现网验收。
 
 ## 前置条件
 

@@ -77,7 +77,7 @@ jobs:
       - name: Install production package
         run: python -m pip install .
 
-      - name: Generate, quality-check and perform Notion read-only dry-run
+      - name: Generate, quality-check and create an isolated Notion pending-review test page
         shell: bash
         run: |
           set -euo pipefail
@@ -89,5 +89,13 @@ jobs:
           python -m overseas_story_producer.cli inspect \
             --input "$artifact" > "$RUNNER_TEMP/m7-inspect-result.json"
           python -m overseas_story_producer.cli submit \
-            --input "$artifact" > "$RUNNER_TEMP/m7-notion-dryrun-result.json"
-          echo "M7 automatic end-to-end validation PASS: generator, reviewer and Notion read-only dry-run. No READY or publication." >> "$GITHUB_STEP_SUMMARY"
+            --input "$artifact" --commit --e2e-test > "$RUNNER_TEMP/m7-notion-result.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("$RUNNER_TEMP/m7-notion-result.json").read_text())
+          if result.get("status") != "CREATED_PENDING_REVIEW" or result.get("e2e_test") is not True:
+              raise SystemExit("Notion E2E did not create the expected isolated pending-review page")
+          print("M7 automatic end-to-end validation PASS: Supabase, author, reviewer, QA and isolated Notion pending page.")
+          PY
+          echo "M7 automatic E2E PASS: pending-review page created inside 'M7 自动化验收测试区'. No READY marker, CMS, WeChat or publication." >> "$GITHUB_STEP_SUMMARY"

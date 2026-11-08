@@ -10,6 +10,7 @@ from .core import ProductionError, validate_artifact
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2026-03-11"
+E2E_TEST_PARENT_TITLE = "M7 自动化验收测试区"
 
 
 def _rich(value: str) -> list[dict]:
@@ -97,6 +98,63 @@ class NotionDraftWriter:
         except (httpx.HTTPError, ValueError):
             raise ProductionError("Notion read failure") from None
 
+    def _find_child_page(self, parent_id: str, title: str) -> str | None:
+        cursor: str | None = None
+        seen: set[str] = set()
+        matches: list[str] = []
+        while True:
+            params = {"page_size": 100}
+            if cursor:
+                params["start_cursor"] = cursor
+            data = self._get(f"/blocks/{parent_id}/children", params)
+            children = data.get("results")
+            if not isinstance(children, list) or not isinstance(data.get("has_more"), bool):
+                raise ProductionError("Incomplete Notion pagination")
+            for child in children:
+                if not isinstance(child, dict):
+                    raise ProductionError("Invalid Notion child block")
+                if child.get("type") == "child_page":
+                    child_title = (child.get("child_page") or {}).get("title", "")
+                    if not isinstance(child_title, str):
+                        raise ProductionError("Invalid Notion child page title")
+                    if child_title == title:
+                        try:
+                            matches.append(str(UUID(child.get("id", ""))))
+                        except (ValueError, TypeError, AttributeError):
+                            raise ProductionError("Invalid Notion child page ID") from None
+            if not data["has_more"]:
+                break
+            cursor = data.get("next_cursor")
+            if not isinstance(cursor, str) or not cursor or cursor in seen:
+                raise ProductionError("Notion pagination cannot be trusted")
+            seen.add(cursor)
+        if len(matches) > 1:
+            raise ProductionError("Multiple M7 E2E test containers found; refusing ambiguous write")
+        return matches[0] if matches else None
+
+    def _ensure_e2e_test_parent(self) -> str:
+        existing = self._find_child_page(self.parent_id, E2E_TEST_PARENT_TITLE)
+        if existing:
+            return existing
+        payload = {
+            "parent": {"type": "page_id", "page_id": self.parent_id},
+            "properties": {"title": {"type": "title", "title": _rich(E2E_TEST_PARENT_TITLE)}},
+        }
+        try:
+            response = self.client.post("/pages", json=payload)
+            if response.status_code not in (200, 201) or len(response.content) > 100_000:
+                raise ProductionError("Notion E2E test container creation failed; outcome may be unknown")
+            page = response.json()
+            page_id = str(UUID(page["id"]))
+            parent = page.get("parent", {})
+            if (parent.get("type") != "page_id" or
+                    str(UUID(parent.get("page_id", ""))) != self.parent_id):
+                raise ValueError("Wrong test container parent")
+            return page_id
+        except (httpx.HTTPError, KeyError, ValueError, TypeError):
+            # A timed-out POST may have succeeded; never retry automatically.
+            raise ProductionError("Notion E2E container outcome UNKNOWN; inspect the 07 root before retrying") from None
+
     def _ensure_unique(self, prefix: str) -> None:
         cursor: str | None = None
         seen: set[str] = set()
@@ -124,35 +182,46 @@ class NotionDraftWriter:
                 raise ProductionError("Notion pagination cannot be trusted")
             seen.add(cursor)
 
-    def create_pending_page(self, artifact: dict, *, commit: bool = False) -> dict:
+    def create_pending_page(self, artifact: dict, *, commit: bool = False,
+                            e2e_test: bool = False) -> dict:
         validate_artifact(artifact)
+        if e2e_test and not commit:
+            raise ProductionError("E2E test mode requires an explicit commit to the isolated test area")
         period = artifact["period"]
         prefix = f"{period}｜海外创业志｜"
         blocks = _to_blocks(artifact["body_markdown"],
                             story_id=artifact["story_id"],
                             evidence_ids=artifact["evidence_ids"])
-        self._ensure_unique(prefix)
-        if not commit:
-            return {"status": "DRY_RUN", "title": artifact["notion_title"],
-                    "blocks": len(blocks), "parent": self.parent_id}
-        payload = {
-            "parent": {"type": "page_id", "page_id": self.parent_id},
-            "properties": {"title": {"type": "title", "title": _rich(artifact["notion_title"])}},
-            "children": blocks,
-        }
+        original_parent = self.parent_id
         try:
-            response = self.client.post("/pages", json=payload)
-            if response.status_code not in (200, 201) or len(response.content) > 300_000:
-                raise ProductionError("Notion creation failed; outcome may be unknown, inspect manually")
-            page = response.json()
-            UUID(str(page["id"]))
-            parent = page.get("parent", {})
-            if (parent.get("type") != "page_id" or
-                    str(UUID(parent.get("page_id", ""))) != self.parent_id):
-                raise ValueError("Wrong parent")
-        except (httpx.HTTPError, KeyError, ValueError, TypeError):
-            # Never auto-retry a POST; manually check Notion before another attempt.
-            raise ProductionError("Notion outcome UNKNOWN; inspect the 07 root before retrying") from None
-        return {"status": "CREATED_PENDING_REVIEW", "page_id": page["id"],
-                "url": page.get("url", ""), "title": artifact["notion_title"]}
+            if e2e_test:
+                self.parent_id = self._ensure_e2e_test_parent()
+            self._ensure_unique(prefix)
+            if not commit:
+                return {"status": "DRY_RUN", "title": artifact["notion_title"],
+                        "blocks": len(blocks), "parent": self.parent_id}
+            payload = {
+                "parent": {"type": "page_id", "page_id": self.parent_id},
+                "properties": {"title": {"type": "title", "title": _rich(artifact["notion_title"])}},
+                "children": blocks,
+            }
+            try:
+                response = self.client.post("/pages", json=payload)
+                if response.status_code not in (200, 201) or len(response.content) > 300_000:
+                    raise ProductionError("Notion creation failed; outcome may be unknown, inspect manually")
+                page = response.json()
+                UUID(str(page["id"]))
+                parent = page.get("parent", {})
+                if (parent.get("type") != "page_id" or
+                        str(UUID(parent.get("page_id", ""))) != self.parent_id):
+                    raise ValueError("Wrong parent")
+            except (httpx.HTTPError, KeyError, ValueError, TypeError):
+                # Never auto-retry a POST; an ambiguous response must be inspected.
+                target = "M7 E2E test area" if e2e_test else "the 07 root"
+                raise ProductionError(f"Notion outcome UNKNOWN; inspect {target} before retrying") from None
+            return {"status": "CREATED_PENDING_REVIEW", "page_id": page["id"],
+                    "url": page.get("url", ""), "title": artifact["notion_title"],
+                    "parent": self.parent_id, "e2e_test": e2e_test}
+        finally:
+            self.parent_id = original_parent
 

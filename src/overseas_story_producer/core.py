@@ -103,7 +103,11 @@ def author_prompt(case: Case) -> tuple[str, str]:
         "不得将自述改写为独立核验事实。"
         "不得从收入、客户数、月增长率推断网站访问量、流量、留存、用户活跃、利润或现金流；"
         "原文未明确增长指标时，不得擅自写成访问量增长。"
+        "不得把“每位客户每月支付19列伊”改写为“个人订阅”“个人用户”或消费者套餐，除非来源明确说明客户类型。"
+        "不得仅因原文相邻句子先后提及功能和订阅者，就建立功能上线导致订阅增长的时间或因果关系；"
+        "只有来源明确给出时间先后或因果时才使用“之后”“因此”“促使”等连接词。"
         "不得补写原文未披露的迁移后成本、客户留存或盈利持续性；资料不足时明确留白或省略。"
+        "除产品、品牌、人名及必要技术术语外，正文使用自然、完整的中文，不残留英文普通短语或中英混杂句。"
         "不制造对话、人物心理、收入、因果关系或时间线；材料不足时删去或用保守措辞。"
         "不要把故事写成工具教程或营销软文。避免密集外链，仅在文末列原始来源。"
         "请输出唯一 JSON 对象：title 为不带栏目/日期前缀的中文标题；"
@@ -131,7 +135,11 @@ def reviewer_prompt(case: Case, draft: dict[str, Any]) -> tuple[str, str]:
         "unsupported_claims 只列在中文摘要、原始叙事正文和结构化事实中均找不到依据的具体断言；"
         "不得仅因某句不在结构化 facts 数组中，就忽略摘要或原文正文中的对应依据。"
         "特别检查是否把收入/客户增长错误改写成网站访问量或流量增长；来源未明确给出流量时，该断言应判 unsupported。"
+        "如果来源只说每位客户每月支付某金额，不得默认解释为个人订阅、个人用户或消费者套餐。"
+        "不得仅按原文句子排列顺序推断功能发布与订阅增长之间的时间或因果关系；"
+        "若稿件用“之后”“因此”等建立原文没有说明的先后/因果，应列为 unsupported_claims。"
         "不要要求作者补造来源未披露的迁移后成本、留存或盈利持续性；应鼓励保留开放结局。"
+        "普通叙述必须使用自然中文；英文普通短语或中英混杂表达应列为可读性问题。"
         "按人物与起点20分、冲突与代价25分、选择与转折20分、"
         "结果与开放结局15分、事实可追溯15分、中文可读性5分评分。"
         "不要因为文字流畅而忽略虚构、转载复制、对原作者声称事项的夸大。"
@@ -222,13 +230,21 @@ def evaluate(case: Case, period: str, response: dict[str, Any]) -> dict[str, Any
 def build_artifact(case: Case, period: str, response: dict[str, Any],
                    review: dict[str, Any] | None = None) -> dict[str, Any]:
     validate_case(case)
-    qa = evaluate(case, period, response)
+    normalized = dict(response)
+    raw_body = response.get("body_markdown")
+    if isinstance(raw_body, str):
+        body_text = raw_body.strip()
+        # Deterministically enforce the source-note contract; this adds no new claim.
+        if case.source_url not in body_text:
+            body_text = body_text.rstrip() + "\n\n## 资料来源\n\n" + case.source_url
+        normalized["body_markdown"] = body_text
+    qa = evaluate(case, period, normalized)
     editorial = review_score(review)
     qa["editorial_score"] = editorial["score"]
     qa["editorial_issues"] = editorial["issues"]
     qa["passes_automatic_checks"] = bool(qa["passes_automatic_checks"] and editorial["passes"])
-    title = str(response.get("title", "")).strip()
-    body = str(response.get("body_markdown", "")).strip() + "\n"
+    title = str(normalized.get("title", "")).strip()
+    body = str(normalized.get("body_markdown", "")).strip() + "\n"
     return {
         "format_version": 1,
         "period": period,
@@ -236,8 +252,8 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
         "notion_title": f"{period}｜海外创业志｜{title}",
         "story_id": case.id,
         "original_url": case.source_url,
-        "evidence_ids": response.get("facts_used", []),
-        "uncertainties": response.get("uncertainties", []),
+        "evidence_ids": normalized.get("facts_used", []),
+        "uncertainties": normalized.get("uncertainties", []),
         "body_markdown": body,
         "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "qa": qa,

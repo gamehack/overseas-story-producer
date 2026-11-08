@@ -160,12 +160,11 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("\n".join(lines) + "\n")
           print("M7 safe QA diagnostics: " + json.dumps(safe, ensure_ascii=False))
-          if not safe["combined_gate_passed"]:
-              raise SystemExit(10)
+          status_path = Path(os.environ["RUNNER_TEMP"]) / "m7-qa-gate-status"
+          status_path.write_text("PASS" if safe["combined_gate_passed"] else "FAIL", encoding="ascii")
 
           PY
-          qa_status=$?
-          if [ "$qa_status" -eq 10 ]; then
+          if [ "$(cat "$RUNNER_TEMP/m7-qa-gate-status")" = "FAIL" ]; then
             python -m overseas_story_producer.cli diagnose \
               --input "$artifact" --run-id "$GITHUB_RUN_ID" --commit --e2e-test \
               > "$RUNNER_TEMP/m7-notion-diagnostic-result.json"

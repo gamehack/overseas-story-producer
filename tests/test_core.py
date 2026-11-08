@@ -14,7 +14,7 @@ def test_reviewer_receives_same_archived_evidence_as_author(case, model_response
     _, author_user = author_prompt(case)
     reviewer_system, reviewer_user = reviewer_prompt(case, model_response)
 
-    author_evidence = json.loads(author_user.split("\\n", 1)[1])
+    author_evidence = json.loads(author_user.split("\n", 1)[1])
     reviewer_evidence = json.loads(reviewer_user)
 
     # The reviewer must receive every evidence source available to the author.

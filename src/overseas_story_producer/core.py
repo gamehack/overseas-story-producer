@@ -263,7 +263,7 @@ def build_artifact(case: Case, issue_number: str, response: dict[str, Any],
         "format_version": 1,
         "issue_number": issue_number,
         "source_key": f"overseas-stories:{issue_number}",
-        "notion_title": f"{issue_number}｜海外创业志｜{title}",
+        "notion_title": f"海外创业志 {issue_number}|{title}",
         "story_id": case.id,
         "original_url": case.source_url,
         "evidence_ids": normalized.get("facts_used", []),
@@ -284,7 +284,7 @@ def validate_artifact(item: dict[str, Any]) -> None:
     if item.get("source_key") != f"overseas-stories:{issue_number}":
         raise ProductionError("Artifact source key mismatch")
     title = item.get("notion_title", "")
-    if not isinstance(title, str) or not title.startswith(f"{issue_number}｜海外创业志｜"):
+    if not isinstance(title, str) or not title.startswith(f"海外创业志 {issue_number}|"):
         raise ProductionError("Artifact title does not match allowlisted profile")
     if BAD_TITLE.search(title) or READY.search(title):
         raise ProductionError("Forbidden title")

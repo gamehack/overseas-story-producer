@@ -67,7 +67,7 @@ def test_duplicate_issue_rejected(case, model_response, model_review):
     artifact = build_artifact(case, "01", model_response, model_review)
 
     def handler(request):
-        return _response(request, title="01｜海外创业志｜另一篇")
+        return _response(request, title="海外创业志 01|另一篇")
 
     with NotionDraftWriter("not-a-real-key", PARENT_ID,
                            transport=httpx.MockTransport(handler)) as writer:

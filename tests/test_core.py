@@ -96,7 +96,7 @@ def test_valid_story_and_artifact(case, model_response, model_review):
     assert artifact["qa"]["passes_automatic_checks"]
     assert artifact["source_key"] == "overseas-stories:01"
     assert artifact["issue_number"] == "01"
-    assert artifact["notion_title"].startswith("01｜海外创业志｜")
+    assert artifact["notion_title"].startswith("海外创业志 01|")
     assert artifact["status"] == "PENDING_HUMAN_REVIEW"
     assert artifact["qa"]["editorial_score"] == 94
     validate_artifact(artifact)

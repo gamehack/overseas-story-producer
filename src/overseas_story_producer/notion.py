@@ -310,7 +310,7 @@ class NotionDraftWriter:
         if e2e_test and not commit:
             raise ProductionError("E2E test mode requires an explicit commit to the isolated test area")
         issue_number = artifact["issue_number"]
-        prefix = f"{issue_number}｜海外创业志｜"
+        prefix = f"海外创业志 {issue_number}|"
         blocks = _to_blocks(artifact["body_markdown"],
                             story_id=artifact["story_id"],
                             evidence_ids=artifact["evidence_ids"])

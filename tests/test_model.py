@@ -76,3 +76,62 @@ def test_public_http_refused_even_with_opt_in(base):
 def test_credentials_and_query_in_url_refused(base):
     with pytest.raises(ProductionError, match="Invalid model API URL"):
         _completion(base, allow_private_http=True)
+
+
+@pytest.mark.parametrize(("exc_type", "label"), [
+    (httpx.ConnectTimeout, "connect"),
+    (httpx.ReadTimeout, "read"),
+    (httpx.WriteTimeout, "write"),
+    (httpx.PoolTimeout, "pool"),
+])
+def test_timeout_subtype_reported_without_sensitive_details(exc_type, label):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc_type("secret diagnostics should not leak", request=request)
+
+    with pytest.raises(ProductionError, match=f"^Model timeout [(]{label}[)]$") as error:
+        generate_json(
+            "system", "user",
+            api_base="https://model.example.com/v1", api_key="internal-test-key",
+            model="test-model", transport=httpx.MockTransport(handler),
+        )
+    assert "internal-test-key" not in str(error.value)
+    assert "secret diagnostics" not in str(error.value)
+
+
+def test_transport_error_does_not_expose_request():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("token=internal-test-key", request=request)
+
+    with pytest.raises(ProductionError, match="^Model transport failure$"):
+        generate_json(
+            "system", "user",
+            api_base="https://model.example.com/v1", api_key="internal-test-key",
+            model="test-model", transport=httpx.MockTransport(handler),
+        )
+
+
+def test_custom_timeout_is_applied_without_network():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"] == {
+            "connect": 150.0, "read": 150.0, "write": 150.0, "pool": 150.0,
+        }
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"ok": true}'}}]},
+        )
+
+    assert generate_json(
+        "system", "user",
+        api_base="https://model.example.com/v1", api_key="internal-test-key",
+        model="test-model", timeout_seconds=150.0,
+        transport=httpx.MockTransport(handler),
+    ) == {"ok": True}
+
+
+@pytest.mark.parametrize("invalid", [0.0, 9.0, 301.0, float("nan"), float("inf")])
+def test_invalid_timeout_rejected_before_request(invalid):
+    with pytest.raises(ProductionError, match="Model timeout"):
+        generate_json(
+            "system", "user",
+            api_base="https://model.example.com/v1", api_key="internal-test-key",
+            model="test-model", timeout_seconds=invalid,
+        )

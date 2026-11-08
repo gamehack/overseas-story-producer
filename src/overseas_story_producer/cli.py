@@ -29,6 +29,18 @@ def _review_cooldown_seconds() -> float:
     return seconds
 
 
+def _model_timeout_seconds() -> float:
+    # A separate, bounded value. No retries are performed on timeout.
+    raw = os.getenv("OPENAI_COMPAT_TIMEOUT_SECONDS", "120").strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ProductionError("Invalid model timeout") from None
+    if not math.isfinite(seconds) or not 10 <= seconds <= 300:
+        raise ProductionError("Model timeout must be between 10 and 300 seconds")
+    return seconds
+
+
 def run(argv: list[str] | None = None) -> dict:
     parser = argparse.ArgumentParser(description="QJAI independent overseas-story producer")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -46,26 +58,35 @@ def run(argv: list[str] | None = None) -> dict:
     if args.command == "generate":
         period = canonical_period(args.period)
         review_cooldown = _review_cooldown_seconds()
+        model_timeout = _model_timeout_seconds()
         case = load_case(os.getenv("DATABASE_URL", ""), args.story_id)
         system, prompt = author_prompt(case)
         allow_private_http = os.getenv("OPENAI_COMPAT_ALLOW_PRIVATE_HTTP", "false").strip().lower() in {"1", "true"}
-        model_result = generate_json(
-            system, prompt,
-            api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
-            api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
-            model=os.getenv("OPENAI_COMPAT_MODEL", ""),
-            allow_private_http=allow_private_http,
-        )
+        try:
+            model_result = generate_json(
+                system, prompt,
+                api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
+                api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
+                model=os.getenv("OPENAI_COMPAT_MODEL", ""),
+                allow_private_http=allow_private_http,
+                timeout_seconds=model_timeout,
+            )
+        except ProductionError as exc:
+            raise ProductionError(f"Author stage: {exc}") from None
         review_system, review_user = reviewer_prompt(case, model_result)
         if review_cooldown:
             time.sleep(review_cooldown)
-        review_result = generate_json(
-            review_system, review_user,
-            api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
-            api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
-            model=os.getenv("OPENAI_COMPAT_MODEL", ""),
-            allow_private_http=allow_private_http,
-        )
+        try:
+            review_result = generate_json(
+                review_system, review_user,
+                api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
+                api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
+                model=os.getenv("OPENAI_COMPAT_MODEL", ""),
+                allow_private_http=allow_private_http,
+                timeout_seconds=model_timeout,
+            )
+        except ProductionError as exc:
+            raise ProductionError(f"Reviewer stage: {exc}") from None
         item = build_artifact(case, period, model_result, review_result)
         # The output remains an artifact even when QA fails, for editor review.
         if args.output.exists():

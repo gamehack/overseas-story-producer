@@ -45,7 +45,7 @@ def test_full_source_narrative_is_included_and_editorial_advice_is_excluded(case
     )
     full_case = replace(case, body_excerpt=body)
     system, prompt = author_prompt(full_case)
-    evidence = json.loads(prompt.split("\\n", 1)[1])
+    evidence = json.loads(prompt.split("\n", 1)[1])
 
     assert len(evidence["original_excerpt"]) > 5000
     assert "迁云成本证据" in evidence["original_excerpt"]
@@ -58,7 +58,7 @@ def test_full_source_narrative_is_included_and_editorial_advice_is_excluded(case
 def test_source_evidence_truncation_is_explicit(case):
     full_case = replace(case, body_excerpt="原始证据。" * 5000)
     _, prompt = author_prompt(full_case)
-    evidence = json.loads(prompt.split("\\n", 1)[1])
+    evidence = json.loads(prompt.split("\n", 1)[1])
     assert len(evidence["original_excerpt"]) == 20000
     assert evidence["original_excerpt_truncated"] is True
 

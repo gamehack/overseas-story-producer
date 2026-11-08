@@ -130,7 +130,8 @@ def _decode_sse_completion(response: httpx.Response) -> str:
 def generate_json(system: str, user: str, *, api_base: str, api_key: str,
                   model: str, allow_private_http: bool = False,
                   timeout_seconds: float = 120.0,
-                  transport: httpx.BaseTransport | None = None) -> dict:
+                  transport: httpx.BaseTransport | None = None,
+                  transport_info: dict[str, str] | None = None) -> dict:
     if not api_base or not api_key or not model:
         raise ProductionError("Model URL, API key, and model are required")
     if not isinstance(timeout_seconds, (int, float)) or not math.isfinite(timeout_seconds) or not 10 <= timeout_seconds <= 300:
@@ -156,10 +157,14 @@ def generate_json(system: str, user: str, *, api_base: str, api_key: str,
                 content_type = response.headers.get("content-type", "").lower()
                 if "text/event-stream" in content_type:
                     content = _decode_sse_completion(response)
+                    mode = "sse"
                 else:
                     # Preserve compatibility with gateways/providers that return a
                     # normal JSON completion despite the stream preference.
                     content = _decode_json_completion(response)
+                    mode = "json_fallback"
+                if transport_info is not None:
+                    transport_info["mode"] = mode
     except ProductionError:
         raise
     except httpx.ConnectTimeout:

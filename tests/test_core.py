@@ -38,8 +38,9 @@ def test_full_source_narrative_is_included_and_editorial_advice_is_excluded(case
     long_intro = "原始创业叙述。" * 900
     body = (
         long_intro
-        + "\\n:::advice{slug=\\\"editorial\\\" category=\\\"mindset\\\"}\\n"
-        + "编辑者的总结不能被当成创始人事实。\\n:::\\n"
+        + chr(10) + ':::advice{slug="editorial" category="mindset"}' + chr(10)
+        + "编辑者的总结不能被当成创始人事实。"
+        + chr(10) + ":::" + chr(10)
         + "迁云成本证据：Azure账单下降到每月1500美元。"
     )
     full_case = replace(case, body_excerpt=body)

@@ -77,7 +77,7 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 | --- | --- | --- | --- |
 | `ci.yml` | 每次 PR / push | 不接触密钥、无外部业务写入 | 全量离线测试通过（含网关模拟验证） |
 | `public-gateway-smoke.yml` | 每次 `main` push + 北京时间每天 05:17 | 无密钥；一次 HTTPS GET，不调用模型 | 系统 TLS 验证正常、目标域名应用认证返回 HTTP 401 |
-| `automatic-e2e.yml` | 涉及生产源码的 `main` push + 每周一北京时间 06:43 | 在信任的 `main` Runner 上调用 Supabase 只读、已有 OmniRoute 两次模型调用及 Notion 写入；只在独立的 `M7 自动化验收测试区` 创建待人工审核页面 | 生成成功、M7 独立审稿 ≥85、inspect 通过、Notion 测试页创建及回执校验通过 |
+| `automatic-e2e.yml` | 涉及生产源码的 `main` push（当前暂停周度 schedule，待上游首字节延迟修复后恢复） | 在信任的 `main` Runner 上调用 Supabase 只读、已有 OmniRoute 两次模型调用及 Notion 写入；只在独立的 `M7 自动化验收测试区` 创建待人工审核页面 | 生成成功、M7 独立审稿 ≥85、inspect 通过、Notion 测试页创建及回执校验通过 |
 
 **注意：**网关 HTTP 401 成功，只证明公开路由、TLS、无凭据时的认证边界，不等于模型实际推理通过。GitHub Actions 的完整 E2E 仅在仓库变量 `M7_E2E_ENABLED=true` 后自动执行；未启用时其 job 为 **skipped，绝非集成验收通过**。此开关避免公开仓库尚未配置凭据时产生计费、泄漏或反复失败。启用后不需要人工点击每次测试，但必须先一次性配置可信环境 `m7-integration` 与密钥。
 
@@ -97,3 +97,6 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 ### 完整端到端验收的 Notion 写入边界
 
 当 `M7_E2E_ENABLED=true` 时，自动 E2E 不再只做 Notion dry-run，而是执行真实的 `submit --commit --e2e-test`。首次运行会在 `NOTION_PARENT_PAGE_ID` 下创建唯一的 `M7 自动化验收测试区` 子页面；随后只在这个测试区内创建当日期号的 `PENDING_HUMAN_REVIEW` 文章页。它不会在正式 `07 · 海外创业志` 根目录直接创建文章，不写 READY，不触碰 CMS/公众号，也不自动归档/删除测试页。测试页留存以便检查，后续同一期号重跑会被唯一性保护拒绝。若 Notion POST 返回结果不确定，工作流失败且不自动重试；必须先核对 Notion 测试区再处理。
+
+
+**E2E 调度保护（2026-11-08）：**首次 GitHub-hosted E2E 已实际触发，但作者请求在 120 秒 read timeout 后失败。为避免在已知上游无首字节问题尚未定位时每周重复消耗模型请求，暂时移除 weekly schedule；保持对 `src/**` 和 `pyproject.toml` 的 main push 自动触发。修复代码合并后仍会自动执行一次完整 E2E，不需要手工点击。公网网关 smoke 和无密钥离线 CI 继续照常运行。首次真实 E2E 的日志和边界见 M7 项目 Notion 文档。

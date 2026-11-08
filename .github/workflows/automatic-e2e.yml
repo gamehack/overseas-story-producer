@@ -5,10 +5,6 @@ on:
     paths:
       - 'src/**'
       - 'pyproject.toml'
-      - '.github/workflows/automatic-e2e.yml'
-  schedule:
-    # Every Monday 06:43 Asia/Shanghai, after the existing 03:30 collector.
-    - cron: '43 22 * * 0'
 
 permissions:
   contents: read

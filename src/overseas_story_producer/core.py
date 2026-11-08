@@ -93,7 +93,7 @@ def author_prompt(case: Case) -> tuple[str, str]:
         "uncertainties 为待人工核实的句子数组。"
     )
     evidence = _evidence_bundle(case)
-    return system, "依据以下完整归档材料创作。不能引用未列出的外部事实：\\n" + json.dumps(evidence, ensure_ascii=False)
+    return system, "依据以下完整归档材料创作。不能引用未列出的外部事实：\n" + json.dumps(evidence, ensure_ascii=False)
 
 
 RUBRIC = {"character": 20, "conflict": 25, "decision": 20,

@@ -51,6 +51,7 @@ def run(argv: list[str] | None = None) -> dict:
     s = sub.add_parser("submit", help="Submit a pending story to Notion, not to publishers")
     s.add_argument("--input", type=Path, required=True)
     s.add_argument("--commit", action="store_true", help="Actually create an unapproved draft")
+    s.add_argument("--e2e-test", action="store_true", help="Create the draft only inside the dedicated M7 E2E test area")
     v = sub.add_parser("inspect", help="Inspect artifact quality without external calls")
     v.add_argument("--input", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -112,7 +113,7 @@ def run(argv: list[str] | None = None) -> dict:
                 "title": item["notion_title"]}
     with NotionDraftWriter(os.getenv("NOTION_API_KEY", ""),
                            os.getenv("NOTION_PARENT_PAGE_ID", "")) as writer:
-        return writer.create_pending_page(item, commit=args.commit)
+        return writer.create_pending_page(item, commit=args.commit, e2e_test=args.e2e_test)
 
 
 def main(argv: list[str] | None = None) -> int:

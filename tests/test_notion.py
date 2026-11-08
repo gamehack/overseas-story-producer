@@ -91,3 +91,64 @@ def test_markdown_blocks_have_short_rich_text(case, model_response):
     assert max(len(p["text"]["content"]) for b in blocks
                for p in b[b["type"]]["rich_text"]) <= 1500
 
+
+
+
+def test_e2e_commit_creates_isolated_container_then_pending_article(
+    case, model_response, model_review
+):
+    import json
+
+    from overseas_story_producer.notion import E2E_TEST_PARENT_TITLE
+
+    artifact = build_artifact(case, "2026-11-08", model_response, model_review)
+    test_parent_id = "33333333-3333-4333-8333-333333333333"
+    article_id = "44444444-4444-4444-8444-444444444444"
+    gets = []
+    posts = []
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/children"):
+            parent_id = request.url.path.split("/")[-2]
+            gets.append(parent_id)
+            return httpx.Response(200, json={"results": [], "has_more": False})
+        if request.method == "POST" and request.url.path == "/v1/pages":
+            payload = json.loads(request.content)
+            parent_id = payload["parent"]["page_id"]
+            posts.append(payload)
+            if parent_id == PARENT_ID:
+                return httpx.Response(200, json={
+                    "id": test_parent_id,
+                    "parent": {"type": "page_id", "page_id": PARENT_ID},
+                    "url": "https://www.notion.so/m7-e2e-test-area",
+                })
+            return httpx.Response(200, json={
+                "id": article_id,
+                "parent": {"type": "page_id", "page_id": test_parent_id},
+                "url": "https://www.notion.so/m7-e2e-article",
+            })
+        return httpx.Response(404)
+
+    with NotionDraftWriter("not-a-real-key", PARENT_ID,
+                           transport=httpx.MockTransport(handler)) as writer:
+        result = writer.create_pending_page(artifact, commit=True, e2e_test=True)
+
+    assert result["status"] == "CREATED_PENDING_REVIEW"
+    assert result["page_id"] == article_id
+    assert result["parent"] == test_parent_id
+    assert result["e2e_test"] is True
+    assert len(posts) == 2
+    assert posts[0]["parent"]["page_id"] == PARENT_ID
+    assert posts[0]["properties"]["title"]["title"][0]["text"]["content"] == E2E_TEST_PARENT_TITLE
+    assert posts[1]["parent"]["page_id"] == test_parent_id
+    assert posts[1]["properties"]["title"]["title"][0]["text"]["content"] == artifact["notion_title"]
+    assert "QJAI_PUBLISH_READY" not in json.dumps(posts[1], ensure_ascii=False)
+    assert writer.parent_id == PARENT_ID
+
+
+def test_e2e_test_mode_refuses_dry_run(case, model_response, model_review):
+    artifact = build_artifact(case, "2026-11-08", model_response, model_review)
+    with NotionDraftWriter("not-a-real-key", PARENT_ID,
+                           transport=httpx.MockTransport(lambda request: httpx.Response(200))) as writer:
+        with pytest.raises(ProductionError, match="requires an explicit commit"):
+            writer.create_pending_page(artifact, e2e_test=True)

@@ -154,11 +154,30 @@ def test_sse_stream_is_assembled_and_reasoning_is_not_included():
             200, headers={"content-type": "text/event-stream"}, content=body,
         )
 
+    transport_info = {}
     assert generate_json(
         "system", "user",
         api_base="https://model.example.com/v1", api_key="internal-test-key",
         model="test-model", transport=httpx.MockTransport(handler),
+        transport_info=transport_info,
     ) == {"ok": True}
+    assert transport_info == {"mode": "sse"}
+
+
+def test_json_fallback_transport_is_reported():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"ok": true}'}}]},
+        )
+
+    transport_info = {}
+    assert generate_json(
+        "system", "user",
+        api_base="https://model.example.com/v1", api_key="internal-test-key",
+        model="test-model", transport=httpx.MockTransport(handler),
+        transport_info=transport_info,
+    ) == {"ok": True}
+    assert transport_info == {"mode": "json_fallback"}
 
 
 def test_sse_stream_without_done_is_rejected_as_incomplete():

@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -20,7 +21,7 @@ def test_reviewer_receives_same_archived_evidence_as_author(case, model_response
     # The reviewer must receive every evidence source available to the author.
     for key in (
         "case_id", "original_title", "chinese_title", "source_url",
-        "chinese_synopsis", "original_excerpt", "facts",
+        "chinese_synopsis", "original_excerpt", "original_excerpt_truncated", "facts",
     ):
         assert reviewer_evidence[key] == author_evidence[key]
 
@@ -30,7 +31,35 @@ def test_reviewer_receives_same_archived_evidence_as_author(case, model_response
     }
     assert "中文摘要" in reviewer_system
     assert "原文摘录" in reviewer_system
-    assert "不得仅因某句未出现在结构化 facts 数组中" in reviewer_system
+    assert "不得仅因某句不在结构化 facts 数组中" in reviewer_system
+
+
+def test_full_source_narrative_is_included_and_editorial_advice_is_excluded(case):
+    long_intro = "原始创业叙述。" * 900
+    body = (
+        long_intro
+        + "\\n:::advice{slug=\\\"editorial\\\" category=\\\"mindset\\\"}\\n"
+        + "编辑者的总结不能被当成创始人事实。\\n:::\\n"
+        + "迁云成本证据：Azure账单下降到每月1500美元。"
+    )
+    full_case = replace(case, body_excerpt=body)
+    system, prompt = author_prompt(full_case)
+    evidence = json.loads(prompt.split("\\n", 1)[1])
+
+    assert len(evidence["original_excerpt"]) > 5000
+    assert "迁云成本证据" in evidence["original_excerpt"]
+    assert "编辑者的总结不能被当成创始人事实" not in evidence["original_excerpt"]
+    assert evidence["original_excerpt_truncated"] is False
+    assert "不得从收入、客户数、月增长率推断网站访问量" in system
+    assert "据Mihai自述" in system
+
+
+def test_source_evidence_truncation_is_explicit(case):
+    full_case = replace(case, body_excerpt="原始证据。" * 5000)
+    _, prompt = author_prompt(full_case)
+    evidence = json.loads(prompt.split("\\n", 1)[1])
+    assert len(evidence["original_excerpt"]) == 20000
+    assert evidence["original_excerpt_truncated"] is True
 
 
 def test_valid_story_and_artifact(case, model_response, model_review):

@@ -146,6 +146,79 @@ def test_e2e_commit_creates_isolated_container_then_pending_article(
     assert writer.parent_id == PARENT_ID
 
 
+def test_failed_qa_diagnostic_is_written_only_to_isolated_test_area(
+    case, model_response, model_review
+):
+    import json
+
+    review = dict(model_review)
+    review["unsupported_claims"] = ["未获支持的测试陈述"]
+    artifact = build_artifact(case, "2026-11-08", model_response, review)
+    assert not artifact["qa"]["passes_automatic_checks"]
+    test_parent_id = "33333333-3333-4333-8333-333333333333"
+    diagnostic_id = "55555555-5555-4555-8555-555555555555"
+    posts = []
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/children"):
+            return httpx.Response(200, json={"results": [], "has_more": False})
+        if request.method == "POST" and request.url.path == "/v1/pages":
+            payload = json.loads(request.content)
+            posts.append(payload)
+            parent_id = payload["parent"]["page_id"]
+            if parent_id == PARENT_ID:
+                return httpx.Response(200, json={
+                    "id": test_parent_id,
+                    "parent": {"type": "page_id", "page_id": PARENT_ID},
+                    "url": "https://www.notion.so/m7-e2e-test-area",
+                })
+            return httpx.Response(200, json={
+                "id": diagnostic_id,
+                "parent": {"type": "page_id", "page_id": test_parent_id},
+                "url": "https://www.notion.so/m7-e2e-qa-diagnostic",
+            })
+        return httpx.Response(404)
+
+    with NotionDraftWriter("not-a-real-key", PARENT_ID,
+                           transport=httpx.MockTransport(handler)) as writer:
+        result = writer.create_e2e_qa_diagnostic(
+            artifact, run_id="42485803401", commit=True, e2e_test=True,
+        )
+
+    assert result["status"] == "CREATED_QA_FAILURE_DIAGNOSTIC"
+    assert result["diagnostic_only"] is True
+    assert result["parent"] == test_parent_id
+    assert len(posts) == 2
+    diagnostic_json = json.dumps(posts[1], ensure_ascii=False)
+    assert posts[1]["parent"]["page_id"] == test_parent_id
+    assert "QA诊断" in posts[1]["properties"]["title"]["title"][0]["text"]["content"]
+    assert "未获支持的测试陈述" in diagnostic_json
+    assert model_response["body_markdown"] not in diagnostic_json
+    assert "QJAI_PUBLISH_READY" not in diagnostic_json
+    assert "publish_ready" not in diagnostic_json
+    assert writer.parent_id == PARENT_ID
+
+
+def test_failed_qa_diagnostic_refuses_non_e2e_or_passing_artifacts(
+    case, model_response, model_review
+):
+    writer = NotionDraftWriter("not-a-real-key", PARENT_ID,
+                               transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    with writer:
+        passing = build_artifact(case, "2026-11-08", model_response, model_review)
+        with pytest.raises(ProductionError, match="failed QA gate"):
+            writer.create_e2e_qa_diagnostic(
+                passing, run_id="42485803401", commit=True, e2e_test=True,
+            )
+        failed_review = dict(model_review)
+        failed_review["unsupported_claims"] = ["test claim"]
+        failed = build_artifact(case, "2026-11-08", model_response, failed_review)
+        with pytest.raises(ProductionError, match="explicit E2E commit"):
+            writer.create_e2e_qa_diagnostic(
+                failed, run_id="42485803401", commit=False, e2e_test=True,
+            )
+
+
 def test_e2e_test_mode_refuses_dry_run(case, model_response, model_review):
     artifact = build_artifact(case, "2026-11-08", model_response, model_review)
     with NotionDraftWriter("not-a-real-key", PARENT_ID,

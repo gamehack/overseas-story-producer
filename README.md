@@ -1,19 +1,20 @@
 # 海外创业志 · 独立人物故事生产器（M7）
 
-此仓库只负责将 `overseas_stories` 中的**中文结构化案例与证据**整理成中文人物故事，并送到 Notion `07 · 海外创业志` 下供人工审核。
+此仓库负责将 `overseas_stories` 中的**中文结构化案例与证据**批量生成中文人物故事。正式生产模式通过自动质量门槛后，直接在 Notion `07 · 海外创业志` 建立并签署 READY 文章；人工审核只用于此前的样稿测试，不再是常规上线前置步骤。
 
-**边界：** `qjai-overseas-stories` 继续独立负责采集/翻译/结构化入库；本项目不写数据库、不创建微信公众号/CMS 草稿、不调用微信公众号/CMS API、不写 READY 标记。`mp-publisher`、`cms-publisher` 仍是彼此独立的投递器。
+**边界：** `qjai-overseas-stories` 继续独立负责采集/翻译/结构化入库；本项目不写 Supabase、不创建微信公众号/CMS 草稿、不调用微信公众号/CMS API。只在通过自动审稿后写入 Notion 正文及 READY 签名；`mp-publisher`、`cms-publisher` 仍是彼此独立的草稿投递器。
 
-## M8 常规自动生产（人工审批不变）
+## M8 常规自动生产（周批量生成、每日按序投递）
 
-GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次，默认由仓库变量 `M7_PRODUCTION_ENABLED=true` 才启用。首次合并不会自动写 Notion。手动 dispatch 的 `mode=plan` 只读，`mode=submit` 在该变量开启后才真正生产。
+GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次（晚于采集/索引 03:30），由仓库变量 `M7_PRODUCTION_ENABLED=true` 控制正式定时生产。手动 dispatch 的 `mode=plan` 只读，`mode=submit` 在变量开启后批量生产。业主通过 `[backfill]` 提交标记可一次性触发历史库存回填；普通 push 不发起模型生成。
 
-1. `overseas-story-producer plan` 读取 `overseas_stories` 中评分不低于 70、至少有 5 条中文本地化事实、`review_status=new` 的候选；从正式 Notion 07 一级页读取已有期号、故事 UUID 与 READY 状态，选未用过的最高分案例，自动分配连续的 `02`、`03` 等期号。
-2. 每次最多生产 **1 篇**，最多积压 **2 篇** 未 READY 的待审文章；缺号、重复期号、重复故事、历史文章缺少案例 UUID 时安全退出，不自动修复或补号。可用 `M7_PRIORITY_STORY_IDS`（逗号分隔 UUID，GitHub Variable）优先排序编辑选题；未设置时按候选评分和 UUID 稳定排序。
-3. 两次模型请求和独立质量检查通过后才写 Notion「待人工验收」文章，必要的编辑提醒单独成页。**不会自动添加 READY，不会触发 CMS 或微信，不会自动公开发表。**若模型限流/超时、QA 未通过、Notion POST 回执不确定，任务直接失败，不盲目重试。
-4. 继续复用 `m7-integration` 环境中已有的 `M7_DATABASE_URL`、`M7_SUPABASE_CA_PEM`、`M7_NOTION_API_KEY`、`M7_NOTION_PARENT_PAGE_ID`、`M7_OMNIROUTE_API_KEY`。数据库仍必须是只读角色、`sslmode=verify-full`；运行日志不输出正文或密钥。`M7_E2E_ACTIVE` 保持关闭，不恢复旧的临时测试页。
+1. `overseas-story-producer plan` 读取评分不低于 70、至少有 5 条中文本地化事实、状态不属于 `rejected/handed_off` 的案例；核对正式 Notion 07 一级页所有期号与来源 UUID。排除已生成案例及高置信度同源重复，按优先 UUID、评分和 UUID 稳定排序。一个创业者讲述不同产品/事件不会仅因名字相同被排除。
+2. `overseas-story-producer batch --commit` 将**全部符合条件且未写入的历史/新增案例**依序生成；不限制一周只生产一篇、不依赖过去 7 天的日期窗口、没有两篇待审积压限制。上次失败或部分完成的案例下一次仍可继续处理，缺号、重复期号、无来源 UUID 或存在未签署的正式期号则安全停止。
+3. 每篇经过作者生成与独立自动审阅（双模型调用、结构及证据检查）后写入 Notion，并以 **Notion 实际回读的 Markdown** 计算 SHA-256、追加唯一 `QJAI_PUBLISH_READY` 行，再次回读校验。**不需要人工审核，也不直接调用 CMS/微信 API，更不会自动公开发布。**自动质量未通过则不写稿；限流/超时或 Notion 写入结果不确定时停止整批，不盲目重试。
+4. `cms-publisher` 与 `mp-publisher` 分别每天北京时间 **07:30** 从 READY 库存读取最早一篇未投递文章，各自只写**一个草稿**；是否正式公开发表仍由渠道运营决定。库存不足时安全跳过，不复用旧文章。GitHub Actions 一次最长执行 350 分钟，批处理最多使用 320 分钟；超时预算未处理完可再次 dispatch `submit` 从 Notion 库存安全续跑。
+5. 继续复用 `m7-integration` 环境中已有的 `M7_DATABASE_URL`、`M7_SUPABASE_CA_PEM`、`M7_NOTION_API_KEY`、`M7_NOTION_PARENT_PAGE_ID`、`M7_OMNIROUTE_API_KEY`。数据库仍必须是只读角色、`sslmode=verify-full`；运行日志不输出正文或密钥。`M7_E2E_ACTIVE` 保持关闭，不恢复旧的临时测试页。
 
-合并并通过 CI 后，先在 Actions 上手动选择 `mode=plan` 核对只读选题与期号，再由负责人显式启用 `M7_PRODUCTION_ENABLED=true`。首次自然周运行之后验收真实日志和 Notion 页面，不能以 PR 测试代替现网验收。
+实施后先核对 Actions 的只读选题数量，再启动一次受控历史回填；以实际 Actions 日志及 Notion 页面为验收依据，不能以 PR 测试代替现网验收。
 
 ## 前置条件
 
@@ -23,7 +24,7 @@ GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次，
 - `NOTION_API_KEY` 只赋予选定内容父页面的插入权限，`NOTION_PARENT_PAGE_ID` 必须通过私有环境配置传入，仓库不包含真实页面 ID。
 - 不要把 `.env`、本地成稿 JSON 或数据库凭据提交到 GitHub。
 
-## 人工安全工作流
+## 历史手工测试与紧急修复工作流（不是正常生产）
 
 ```bash
 overseas-story-producer generate \
@@ -43,23 +44,23 @@ overseas-story-producer submit --input outputs/01.json --commit
 
 ## 编辑与发布分工
 
-1. 编辑人工检查人物情节/真实性归属/数据引用/著作权，使用组织内部 M7 编辑质量规范。本地 QA 只是第一道启发式筛查，不是事实核验或最终评分。
-2. 人工确认后，按照两个发布器的 README，在页面末尾添加与 Notion 实际 Markdown 相符的 `QJAI_PUBLISH_READY v=1 source_key=overseas-stories:01 content_sha256=<64位SHA256>`。MD 标准化为 `rstrip()+"\n"` 后计算摘要。标记必须是正文最后一行；任何后续修改都要求重新签署。
-3. 手工触发 `cms-publisher --profile overseas --issue 01` 和 `mp-publisher` 对应的单期 `overseas` 命令；两者默认均关闭，必须分别检查 CMS 分类与微信封面、状态、密钥及 IP 白名单。
-4. 编辑人员确认 CMS 草稿与微信公众号草稿内容无误后，再由人操作发布。
+1. 正式生成自动执行结构、来源归属、重大编造和编辑质量的检查，但不会把创业者自述当成独立核验事实；低于自动门槛的内容不能进入 READY 库存。
+2. 正式批量生成器自动追加 `QJAI_PUBLISH_READY v=1 source_key=overseas-stories:NN content_sha256=<64位SHA256>`，摘要以 Notion 实际 Markdown 的 `rstrip()+"\n"` 计算。任何后续正文修改都会令两个发布器拒绝该稿，不能继续使用旧摘要。
+3. `cms-publisher` 与 `mp-publisher` 使用各自独立的已授权日常调度、投递账本、封面、CMS 分类和微信 IP 白名单；每天各读取最早一篇未交付的 READY 文章，不需要人工逐期指定。
+4. 本生产流程只交付两端草稿，不自动将内容对公众正式发表。
 
 ## 数据质量与安全限制
 
 - 每篇案例至少含 5 条有效、已翻译、带证据的结构化事实，AI 返回至少 5 个证据 UUID。
 - AI 必须叙述 **人物、困难、选择与转折**，不得将作者自述变成独立核验事实，不得虚构对话与具体数字。
 - 每篇调用模型两次（成稿 + 独立审阅），第二次按 M7 六维 100 分标准提供逐项分数、来源偏差警告及严重编造判断。**这不是独立事实核验**：创业者公开自述可忠实转述，即使无法外部证实也不因此阻断。评分低于 85、结构检查不通过、审稿格式无效或发现严重编造（`hard_fail=true`）才阻止 Notion 待审交接。普通 `unsupported_claims` 保留为编辑警告，不再一票否决。
-- 严重编造包括虚构人物、重大事件、直接引语或收入数字，以及足以改变故事结论的虚构因果/时间线；普通描述偏差（例如太阳能板位置、菜单层级）只提醒编辑。自动生成的文章只能进入 `PENDING_HUMAN_REVIEW`，绝不自动 READY 或发布。来源偏差保存在产物的 `qa.editorial_warnings`、`qa.editorial_issues` 和 `editorial_review` 中；Notion 写入时，会把审稿意见放到独立的 `M7 编辑备注｜...` 子页面，与待审文章并列，不混入可发布正文。公开 GitHub Actions 日志只暴露数量，不公开全文。
+- 严重编造包括虚构人物、重大事件、直接引语或收入数字，以及足以改变故事结论的虚构因果/时间线；普通描述偏差（例如太阳能板位置、菜单层级）保留为模型警告。旧手工 `generate/submit` 仍只创建 `PENDING_HUMAN_REVIEW` 的测试产物并可写内部编辑备注；新的正式 `batch --commit` 通过自动审稿后直接签署 READY，不附加内部备注到文章正文。公开 GitHub Actions 日志只暴露数量，不公开全文。
 - 复用现有 OmniRoute 时，为避免首轮生成消耗模型速率预算，首次成功返回后默认等待 **90 秒**再发起独立质检；可通过 `OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS` 配置 0–600 秒（测试可置 0）。这不是重试：任何一次 HTTP 429 / 超时均立即停止，不会自动再次发送请求；需先检查网关限流规则再人工决定是否重新启动。
 - `OPENAI_COMPAT_TIMEOUT_SECONDS` 默认 `120` 秒，可配置 `10`–`300` 秒；分别输出 connect/read/write/pool 超时错误，并标记 author/reviewer 阶段，绝不记录完整请求、URL 或密钥。**此开关不执行任何重试，修改超时前须先核实 OmniRoute 上游超时层级及主机资源；MVP 暂不自行调整现网默认值。**
 - 自动检查标题、章节、来源、字数、证据 ID、READY 泄漏；模型二次审阅不能替代人工查阅来源或确认版权。
 - 一个不依赖日期的序号（`01`、`02`、...）只对应一个 Notion 子页面；标题为 `海外创业志 01|自然中文人物故事标题`，唯一来源键为 `overseas-stories:01`。故事中包含主来源 URL 与案例/事实 UUID 供溯源。
 - 读取时严格复算 M4 `story_source_hash`、使用只返回最新翻译事实的 `localized_facts` 视图，源数据或翻译过期则拒绝生成。
-- **未完成的上线前验收项**：复核现有模型成本/合规、人工抽检样稿、将代码入新独立 GitHub 仓库并运行 CI、服务器运行账号与调度错峰。
+- **正式上线核验**：检查每周 GitHub Actions 批次、模型限流与成本、Notion READY 回读及两个独立的每日草稿投递记录；人工抽检属于可选运营质量监控，不是逐篇人工审批。
 
 ## 本地回归
 
@@ -93,7 +94,7 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 
 **注意：**网关 HTTP 401 成功，只证明公开路由、TLS、无凭据时的认证边界，不等于模型实际推理通过。GitHub Actions 的完整 E2E 仅在仓库变量 `M7_E2E_ENABLED=true` 且 `M7_E2E_ACTIVE=true` 后自动执行；未启用时其 job 为 **skipped，绝非集成验收通过**。这两个开关避免测试已结束或公开仓库尚未配置凭据时产生计费、泄漏、临时页面或反复失败。启用后不需要人工点击每次测试，但必须先一次性配置可信环境 `m7-integration` 与密钥。
 
-**2026-11-09 转入正常生产流程：**隔离 M7 E2E 测试已结束，测试区已清理。为了避免遗留的 `M7_E2E_ENABLED=true` 在源码更新时重新创建临时页，E2E 现额外要求显式仓库变量 `M7_E2E_ACTIVE=true` 才运行；缺省不运行。普通离线 CI 和公网网关 smoke 保持自动运行。将来需要重启集成测试时须先准备独立测试区并显式重新启用，不能把 E2E 当作正式文章生产。正式文章标题连同栏目期号需控制在 64 UTF-8 字节内，仍必须人工审核后才添加 READY。
+**2026-11-09 转入正常生产流程：**隔离 M7 E2E 测试已结束，测试区已清理。为了避免遗留的 `M7_E2E_ENABLED=true` 在源码更新时重新创建临时页，E2E 现额外要求显式仓库变量 `M7_E2E_ACTIVE=true` 才运行；缺省不运行。普通离线 CI 和公网网关 smoke 保持自动运行。将来需要重启集成测试时须先准备独立测试区并显式重新启用，不能把 E2E 当作正式文章生产。正式文章标题连同栏目期号需控制在 64 UTF-8 字节内；正式批次改由自动审稿后签署 READY。
 
 一次性配置，不属于每次测试动作：
 
@@ -103,7 +104,7 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 - 保护 `main` 的代码变更审核权限和 `m7-integration` 环境的可访问分支。自动测试不配置每次运行必须批准的 Environment reviewer，否则又会引入人工执行环节。
 - 公共仓库 PR 测试不使用生产密钥；CI 不使用 `pull_request_target`。真实 E2E 一次最多触发作者及审稿各一次请求，错误即停，不自动重试或补跑，不公开原文和 JSON Artifact。
 - 定时 GitHub Actions 可能延迟；公开仓库在长期无活动时可能停用定时触发。定时执行状态需要独立监控。
-- 所有生产稿仍需人工审阅才能写 `QJAI_PUBLISH_READY`；此要求是出版审批，不是测试执行前置条件。
+- 历史 E2E 仍保留未签名测试稿机制，不代表正式批处理的自动签名流程。正常生产不需要逐篇人工审阅。
 
 既有本地 `generate / inspect / submit` 命令仅供应急排障和编辑复核；正常验收使用上述自动化工作流。**自动 E2E 会在专用测试区写入真实 Notion 待审页或 QA 失败诊断页，但不等同正式生产投递上线。**
 

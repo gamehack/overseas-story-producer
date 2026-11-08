@@ -1,5 +1,6 @@
 import httpx
 import pytest
+import hashlib
 
 from overseas_story_producer.core import ProductionError, build_artifact
 from overseas_story_producer.notion import NotionDraftWriter, _to_blocks
@@ -73,6 +74,58 @@ def test_duplicate_issue_rejected(case, model_response, model_review):
                            transport=httpx.MockTransport(handler)) as writer:
         with pytest.raises(ProductionError, match="already exists"):
             writer.create_pending_page(artifact, commit=True)
+
+
+def test_automatic_ready_signs_actual_notion_markdown_without_human_review(
+    case, model_response, model_review
+):
+    artifact = build_artifact(case, "02", model_response, model_review)
+    article_id = "11111111-1111-4111-8111-111111111111"
+    rendered = "# 一个故事\n\n文章由 Notion 实际 Markdown 渲染。\n\n档案编号：" + case.id + "；已引用 6 条原始事实。"
+    markers = []
+    posts = []
+
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/children"):
+            return httpx.Response(200, json={"results": [], "has_more": False})
+        if request.method == "GET" and request.url.path.endswith("/markdown"):
+            text = rendered + ("\n\n" + markers[0] if markers else "") + "\n"
+            return httpx.Response(200, json={"object": "page_markdown", "markdown": text,
+                                             "truncated": False, "unknown_block_ids": [], "warnings": []})
+        if request.method == "POST":
+            posts.append(1)
+            return _response(request)
+        if request.method == "PATCH":
+            markers.append(request.read().decode())
+            import json
+            markers[-1] = json.loads(markers[-1])["children"][0]["paragraph"]["rich_text"][0]["text"]["content"]
+            return httpx.Response(200, json={"results": [{"id": article_id}]})
+        return httpx.Response(404)
+
+    with NotionDraftWriter("x", PARENT_ID, transport=httpx.MockTransport(handler)) as writer:
+        result = writer.create_pending_page(artifact, commit=True, auto_ready=True)
+    digest = hashlib.sha256((rendered.rstrip() + "\n").encode()).hexdigest()
+    assert result["status"] == "CREATED_AUTO_READY"
+    assert result["content_sha256"] == digest
+    assert markers == [f"QJAI_PUBLISH_READY v=1 source_key=overseas-stories:02 content_sha256={digest}"]
+    assert len(posts) == 1  # No editorial notes or additional Notion pages
+
+
+def test_automatic_ready_never_retries_ambiguous_patch(case, model_response, model_review):
+    artifact = build_artifact(case, "02", model_response, model_review)
+    patches = []
+    def handler(request):
+        if request.method == "GET" and request.url.path.endswith("/markdown"):
+            return httpx.Response(200, json={"object": "page_markdown", "markdown": "# 正文",
+                                             "truncated": False, "unknown_block_ids": [], "warnings": []})
+        if request.method == "PATCH":
+            patches.append(1)
+            raise httpx.ReadTimeout("unknown outcome")
+        return _response(request)
+    with NotionDraftWriter("x", PARENT_ID, transport=httpx.MockTransport(handler)) as writer:
+        with pytest.raises(ProductionError, match="UNKNOWN"):
+            writer.create_pending_page(artifact, commit=True, auto_ready=True)
+    assert len(patches) == 1
 
 
 def test_ambiguous_post_does_not_retry(case, model_response, model_review):

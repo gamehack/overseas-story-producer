@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from uuid import UUID
 
 import httpx
@@ -98,6 +99,46 @@ class NotionDraftWriter:
             return data
         except (httpx.HTTPError, ValueError):
             raise ProductionError("Notion read failure") from None
+
+    def _article_markdown(self, page_id: str) -> str:
+        data = self._get(f"/pages/{page_id}/markdown", {"markdown_version": "v2"})
+        if (data.get("object") != "page_markdown" or
+                not isinstance(data.get("markdown"), str) or
+                data.get("truncated") is not False or
+                data.get("unknown_block_ids") not in ([], None) or
+                data.get("warnings") not in ([], None)):
+            raise ProductionError("Cannot verify complete Notion article Markdown")
+        return data["markdown"]
+
+    def _sign_ready(self, page_id: str, source_key: str) -> str:
+        """Append a publisher-compatible content SHA only after live Notion readback.
+
+        Never retry an ambiguous PATCH: the marker may already exist. The daily
+        publishers independently re-check the same hash before draft delivery.
+        """
+        original = self._article_markdown(page_id)
+        if "QJAI_PUBLISH_READY" in original or r"QJAI\_PUBLISH\_READY" in original:
+            raise ProductionError("READY marker already present; refusing double signature")
+        canonical = original.rstrip() + "\n"
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        marker = f"QJAI_PUBLISH_READY v=1 source_key={source_key} content_sha256={digest}"
+        try:
+            response = self.client.patch(f"/blocks/{page_id}/children",
+                                         json={"children": [_block("paragraph", marker)]})
+            if response.status_code not in (200, 201) or len(response.content) > 100_000:
+                raise ProductionError("Notion READY append outcome UNKNOWN; inspect page before retrying")
+        except httpx.HTTPError:
+            raise ProductionError("Notion READY append outcome UNKNOWN; inspect page before retrying") from None
+        after = self._article_markdown(page_id)
+        lines = after.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        signatures = [i for i, line in enumerate(lines)
+                      if line.strip().replace(r"\_", "_") == marker]
+        if len(signatures) != 1 or any(line.strip() for line in lines[signatures[0] + 1:]):
+            raise ProductionError("READY signature readback mismatch; production must stop")
+        if hashlib.sha256(("\n".join(lines[:signatures[0]]).rstrip() + "\n")
+                          .encode("utf-8")).hexdigest() != digest:
+            raise ProductionError("READY content hash readback mismatch; production must stop")
+        return digest
 
     def _find_child_page(self, parent_id: str, title: str) -> str | None:
         cursor: str | None = None
@@ -378,10 +419,12 @@ class NotionDraftWriter:
 
 
     def create_pending_page(self, artifact: dict, *, commit: bool = False,
-                            e2e_test: bool = False) -> dict:
+                            e2e_test: bool = False, auto_ready: bool = False) -> dict:
         validate_artifact(artifact)
         if e2e_test and not commit:
             raise ProductionError("E2E test mode requires an explicit commit to the isolated test area")
+        if auto_ready and (not commit or e2e_test):
+            raise ProductionError("Automatic READY requires committed, non-E2E production")
         issue_number = artifact["issue_number"]
         prefix = f"海外创业志 {issue_number}|"
         blocks = _to_blocks(artifact["body_markdown"],
@@ -414,8 +457,14 @@ class NotionDraftWriter:
                 # Never auto-retry a POST; an ambiguous response must be inspected.
                 target = "M7 E2E test area" if e2e_test else "the 07 root"
                 raise ProductionError(f"Notion outcome UNKNOWN; inspect {target} before retrying") from None
-            review_note = self._create_editorial_notes(artifact, str(page["id"]))
-            return {"status": "CREATED_PENDING_REVIEW", "page_id": page["id"],
+            if auto_ready:
+                digest = self._sign_ready(str(page["id"]), artifact["source_key"])
+                review_note = None
+            else:
+                digest = None
+                review_note = self._create_editorial_notes(artifact, str(page["id"]))
+            return {"status": "CREATED_AUTO_READY" if auto_ready else "CREATED_PENDING_REVIEW",
+                    "content_sha256": digest, "page_id": page["id"],
                     "url": page.get("url", ""), "title": artifact["notion_title"],
                     "parent": self.parent_id, "e2e_test": e2e_test,
                     "review_note": review_note}

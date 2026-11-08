@@ -132,7 +132,7 @@ jobs:
               "unclassified_automatic_issue_count": len(automatic_issues) - len(safe_automatic),
               "editorial_score": qa.get("editorial_score"),
               "editorial_issue_count": len(editorial_issues),
-              "unsupported_claim_count": sum(
+              "source_fidelity_warning_count": sum(
                   isinstance(x, str) and x.startswith("Unsupported:")
                   for x in editorial_issues
               ),
@@ -153,8 +153,8 @@ jobs:
           lines.extend([
               f"- Independent editorial score: `{safe['editorial_score']}` / 100",
               f"- Editorial issue count: `{safe['editorial_issue_count']}`",
-              f"- Unsupported claim count: `{safe['unsupported_claim_count']}`",
-              f"- Hard-fail flag: `{safe['hard_fail']}`",
+              f"- Source-fidelity warnings for human review: `{safe['source_fidelity_warning_count']}`",
+              f"- Serious-fabrication hard-fail flag: `{safe['hard_fail']}`",
               f"- Combined QA gate: `{'PASS' if safe['combined_gate_passed'] else 'FAIL'}`",
           ])
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
@@ -191,6 +191,9 @@ jobs:
           result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "m7-notion-result.json").read_text())
           if result.get("status") != "CREATED_PENDING_REVIEW" or result.get("e2e_test") is not True:
               raise SystemExit("Notion E2E did not create the expected isolated pending-review page")
-          print("M7 automatic end-to-end validation PASS: Supabase, author, reviewer, QA and isolated Notion pending page.")
+          qa = json.loads((Path(os.environ["RUNNER_TEMP"]) / "m7-generate-result.json").read_text()).get("qa", {})
+          if qa.get("editorial_issues") and not result.get("review_note"):
+              raise SystemExit("Notion E2E did not preserve editorial warnings in a separate note page")
+          print("M7 automatic end-to-end validation PASS: Supabase, author, reviewer, QA, isolated Notion pending page and separate editorial notes.")
           PY
-          echo "M7 automatic E2E PASS: pending-review page created inside 'M7 自动化验收测试区'. No READY marker, CMS, WeChat or publication." >> "$GITHUB_STEP_SUMMARY"
+          echo "M7 automatic E2E PASS: pending-review article and separate editorial notes (when present) created inside 'M7 自动化验收测试区'. No READY marker, CMS, WeChat or publication." >> "$GITHUB_STEP_SUMMARY"

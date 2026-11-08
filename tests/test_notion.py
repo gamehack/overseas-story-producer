@@ -37,6 +37,7 @@ def test_dry_run_creates_nothing(case, model_response, model_review):
 
 
 def test_commit_create_pending_not_ready(case, model_response, model_review):
+    model_review["unsupported_claims"] = ["太阳能板屋顶位置无来源支持"]
     artifact = build_artifact(case, "2026-11-09", model_response, model_review)
     sent = []
 
@@ -49,10 +50,17 @@ def test_commit_create_pending_not_ready(case, model_response, model_review):
                            transport=httpx.MockTransport(handler)) as writer:
         result = writer.create_pending_page(artifact, commit=True)
     assert result["status"] == "CREATED_PENDING_REVIEW"
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert "PENDING_HUMAN_REVIEW" not in sent[0]  # Human-facing state only
     assert "QJAI_PUBLISH_READY" not in sent[0]
     assert "档案编号" in sent[0]
+    # Internal review warnings remain in the artifact, not in publishable body blocks.
+    assert artifact["qa"]["editorial_warnings"] == ["太阳能板屋顶位置无来源支持"]
+    assert "太阳能板屋顶位置无来源支持" not in sent[0]
+    assert "太阳能板屋顶位置无来源支持" in sent[1]
+    assert "内部编辑备注" in sent[1]
+    assert "QJAI_PUBLISH_READY" not in sent[1]
+    assert result["review_note"] is not None
 
 
 def test_duplicate_period_rejected(case, model_response, model_review):
@@ -81,6 +89,42 @@ def test_ambiguous_post_does_not_retry(case, model_response, model_review):
                            transport=httpx.MockTransport(handler)) as writer:
         with pytest.raises(ProductionError, match="UNKNOWN"):
             writer.create_pending_page(artifact, commit=True)
+    assert len(posts) == 1
+
+
+def test_editorial_note_failure_does_not_retry_or_publish(case, model_response, model_review):
+    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(request.content.decode())
+            if len(posts) == 2:
+                raise httpx.ReadTimeout("ambiguous note write")
+        return _response(request)
+
+    with NotionDraftWriter("not-a-real-key", PARENT_ID,
+                           transport=httpx.MockTransport(handler)) as writer:
+        with pytest.raises(ProductionError, match="Editorial note outcome UNKNOWN"):
+            writer.create_pending_page(artifact, commit=True)
+    assert len(posts) == 2  # Article might exist; no automatic retry of either POST.
+    assert "QJAI_PUBLISH_READY" not in posts[0]
+
+
+def test_no_editorial_notes_does_not_create_sidecar(case, model_response, model_review):
+    model_review["issues"] = []
+    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    posts = []
+
+    def handler(request):
+        if request.method == "POST":
+            posts.append(1)
+        return _response(request)
+
+    with NotionDraftWriter("not-a-real-key", PARENT_ID,
+                           transport=httpx.MockTransport(handler)) as writer:
+        result = writer.create_pending_page(artifact, commit=True)
+    assert result["review_note"] is None
     assert len(posts) == 1
 
 
@@ -137,12 +181,15 @@ def test_e2e_commit_creates_isolated_container_then_pending_article(
     assert result["page_id"] == article_id
     assert result["parent"] == test_parent_id
     assert result["e2e_test"] is True
-    assert len(posts) == 2
+    assert len(posts) == 3
     assert posts[0]["parent"]["page_id"] == PARENT_ID
     assert posts[0]["properties"]["title"]["title"][0]["text"]["content"] == E2E_TEST_PARENT_TITLE
     assert posts[1]["parent"]["page_id"] == test_parent_id
     assert posts[1]["properties"]["title"]["title"][0]["text"]["content"] == artifact["notion_title"]
     assert "QJAI_PUBLISH_READY" not in json.dumps(posts[1], ensure_ascii=False)
+    assert "编辑备注" in posts[2]["properties"]["title"]["title"][0]["text"]["content"]
+    assert "可压缩一个重复段落" not in json.dumps(posts[1], ensure_ascii=False)
+    assert "可压缩一个重复段落" in json.dumps(posts[2], ensure_ascii=False)
     assert writer.parent_id == PARENT_ID
 
 
@@ -153,6 +200,8 @@ def test_failed_qa_diagnostic_is_written_only_to_isolated_test_area(
 
     review = dict(model_review)
     review["unsupported_claims"] = ["未获支持的测试陈述"]
+    review["hard_fail"] = True
+    review["hard_fail_reason"] = "虚构关键收入及人生事件"
     artifact = build_artifact(case, "2026-11-08", model_response, review)
     assert not artifact["qa"]["passes_automatic_checks"]
     test_parent_id = "33333333-3333-4333-8333-333333333333"
@@ -212,6 +261,8 @@ def test_failed_qa_diagnostic_refuses_non_e2e_or_passing_artifacts(
             )
         failed_review = dict(model_review)
         failed_review["unsupported_claims"] = ["test claim"]
+        failed_review["hard_fail"] = True
+        failed_review["hard_fail_reason"] = "Fabricated major milestone"
         failed = build_artifact(case, "2026-11-08", model_response, failed_review)
         with pytest.raises(ProductionError, match="explicit E2E commit"):
             writer.create_e2e_qa_diagnostic(

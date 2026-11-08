@@ -41,7 +41,8 @@ overseas-story-producer submit --input outputs/2026-11-09.json --commit
 
 - 每篇案例至少含 5 条有效、已翻译、带证据的结构化事实，AI 返回至少 5 个证据 UUID。
 - AI 必须叙述 **人物、困难、选择与转折**，不得将作者自述变成独立核验事实，不得虚构对话与具体数字。
-- 每篇调用模型两次（成稿 + 独立审阅），第二次按 M7 六维 100 分标准提供逐项分数、错误点及硬性问题；低于 85 分或有不可追溯断言不可提交 Notion。两个模型调用的费用与延迟需在现网模型上先验收。
+- 每篇调用模型两次（成稿 + 独立审阅），第二次按 M7 六维 100 分标准提供逐项分数、来源偏差警告及严重编造判断。**这不是独立事实核验**：创业者公开自述可忠实转述，即使无法外部证实也不因此阻断。评分低于 85、结构检查不通过、审稿格式无效或发现严重编造（`hard_fail=true`）才阻止 Notion 待审交接。普通 `unsupported_claims` 保留为编辑警告，不再一票否决。
+- 严重编造包括虚构人物、重大事件、直接引语或收入数字，以及足以改变故事结论的虚构因果/时间线；普通描述偏差（例如太阳能板位置、菜单层级）只提醒编辑。自动生成的文章只能进入 `PENDING_HUMAN_REVIEW`，绝不自动 READY 或发布。来源偏差保存在产物的 `qa.editorial_warnings`、`qa.editorial_issues` 和 `editorial_review` 中；Notion 写入时，会把审稿意见放到独立的 `M7 编辑备注｜...` 子页面，与待审文章并列，不混入可发布正文。公开 GitHub Actions 日志只暴露数量，不公开全文。
 - 复用现有 OmniRoute 时，为避免首轮生成消耗模型速率预算，首次成功返回后默认等待 **90 秒**再发起独立质检；可通过 `OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS` 配置 0–600 秒（测试可置 0）。这不是重试：任何一次 HTTP 429 / 超时均立即停止，不会自动再次发送请求；需先检查网关限流规则再人工决定是否重新启动。
 - `OPENAI_COMPAT_TIMEOUT_SECONDS` 默认 `120` 秒，可配置 `10`–`300` 秒；分别输出 connect/read/write/pool 超时错误，并标记 author/reviewer 阶段，绝不记录完整请求、URL 或密钥。**此开关不执行任何重试，修改超时前须先核实 OmniRoute 上游超时层级及主机资源；MVP 暂不自行调整现网默认值。**
 - 自动检查标题、章节、来源、字数、证据 ID、READY 泄漏；模型二次审阅不能替代人工查阅来源或确认版权。
@@ -77,7 +78,7 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 | --- | --- | --- | --- |
 | `ci.yml` | 每次 PR / push | 不接触密钥、无外部业务写入 | 全量离线测试通过（含网关模拟验证） |
 | `public-gateway-smoke.yml` | 每次 `main` push + 北京时间每天 05:17 | 无密钥；一次 HTTPS GET，不调用模型 | 系统 TLS 验证正常、目标域名应用认证返回 HTTP 401 |
-| `automatic-e2e.yml` | 涉及生产源码的 `main` push（当前暂停周度 schedule，待上游首字节延迟修复后恢复） | 在信任的 `main` Runner 上调用 Supabase 只读、已有 OmniRoute 两次模型调用及 Notion 写入；只在独立的 `M7 自动化验收测试区` 创建待人工审核页面 | 生成成功、M7 独立审稿 ≥85、inspect 通过、Notion 测试页创建及回执校验通过 |
+| `automatic-e2e.yml` | 涉及生产源码的 `main` push（周度测试 schedule 暂停） | 在信任的 `main` Runner 上调用 Supabase 只读、已有 OmniRoute 两次模型调用及 Notion 写入；只在独立的 `M7 自动化验收测试区` 创建待人工审核页面 | 生成成功、M7 独立审稿 ≥85、无严重编造、inspect 通过、Notion 测试页创建及回执校验通过 |
 
 **注意：**网关 HTTP 401 成功，只证明公开路由、TLS、无凭据时的认证边界，不等于模型实际推理通过。GitHub Actions 的完整 E2E 仅在仓库变量 `M7_E2E_ENABLED=true` 后自动执行；未启用时其 job 为 **skipped，绝非集成验收通过**。此开关避免公开仓库尚未配置凭据时产生计费、泄漏或反复失败。启用后不需要人工点击每次测试，但必须先一次性配置可信环境 `m7-integration` 与密钥。
 
@@ -91,12 +92,12 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 - 定时 GitHub Actions 可能延迟；公开仓库在长期无活动时可能停用定时触发。定时执行状态需要独立监控。
 - 所有生产稿仍需人工审阅才能写 `QJAI_PUBLISH_READY`；此要求是出版审批，不是测试执行前置条件。
 
-既有本地 `generate / inspect / submit` 命令仅供应急排障和编辑复核；正常验收使用上述自动化工作流。**本版自动 E2E 是只读/无 Notion 写入的联通与质量测试，不等同正式生产投递已经上线。**
+既有本地 `generate / inspect / submit` 命令仅供应急排障和编辑复核；正常验收使用上述自动化工作流。**自动 E2E 会在专用测试区写入真实 Notion 待审页或 QA 失败诊断页，但不等同正式生产投递上线。**
 
 
 ### 完整端到端验收的 Notion 写入边界
 
-当 `M7_E2E_ENABLED=true` 时，自动 E2E 不再只做 Notion dry-run，而是执行真实的 `submit --commit --e2e-test`。首次运行会在 `NOTION_PARENT_PAGE_ID` 下创建唯一的 `M7 自动化验收测试区` 子页面；随后只在这个测试区内创建当日期号的 `PENDING_HUMAN_REVIEW` 文章页。它不会在正式 `07 · 海外创业志` 根目录直接创建文章，不写 READY，不触碰 CMS/公众号，也不自动归档/删除测试页。测试页留存以便检查，后续同一期号重跑会被唯一性保护拒绝。若 Notion POST 返回结果不确定，工作流失败且不自动重试；必须先核对 Notion 测试区再处理。
+当 `M7_E2E_ENABLED=true` 时，自动 E2E 不再只做 Notion dry-run，而是执行真实的 `submit --commit --e2e-test`。首次运行会在 `NOTION_PARENT_PAGE_ID` 下创建唯一的 `M7 自动化验收测试区` 子页面；随后只在这个测试区内创建当日期号的 `PENDING_HUMAN_REVIEW` 文章页，必要时创建并列的 `M7 编辑备注` 页面供人工审阅。编辑备注包含 QA 意见，不包含完整正文，且不匹配发布器的文章标题前缀。它不会在正式 `07 · 海外创业志` 根目录直接创建测试文章，不写 READY，不触碰 CMS/公众号，也不自动归档/删除测试页。测试页留存以便检查，后续同一期号重跑会被唯一性保护拒绝。若 Notion POST 返回结果不确定，工作流失败且不自动重试；必须先核对 Notion 测试区再处理。
 
 
 **E2E 调度保护（2026-11-08）：**首次 GitHub-hosted E2E 已实际触发，但作者请求在 120 秒 read timeout 后失败。为避免在已知上游无首字节问题尚未定位时每周重复消耗模型请求，暂时移除 weekly schedule；保持对 `src/**` 和 `pyproject.toml` 的 main push 自动触发。修复代码合并后仍会自动执行一次完整 E2E，不需要手工点击。公网网关 smoke 和无密钥离线 CI 继续照常运行。首次真实 E2E 的日志和边界见 M7 项目 Notion 文档。
@@ -116,4 +117,4 @@ Streaming is intended to let the client receive response bytes as they are gener
 
 ### E2E QA failure diagnostics
 
-When the full E2E reaches the editorial QA gate but does not pass, it writes a **diagnostic-only** Notion page inside the dedicated `M7 自动化验收测试区`. That page contains scores, issue labels, and the reviewer's unsupported-claim excerpts so the failure can be diagnosed without publishing or exposing the full manuscript in public GitHub logs. It is explicitly marked `QA_FAILED_DIAGNOSTIC_ONLY`; it is not a pending article, contains no full article body, has no READY marker, and is never sent to CMS or WeChat. The workflow still exits as failed. Only an artifact that passes both structural and independent editorial gates can be submitted as a `CREATED_PENDING_REVIEW` article page.
+When the full E2E fails structural validation, the 85-point editorial threshold, or the serious-fabrication gate, it writes a **diagnostic-only** Notion page inside the dedicated `M7 自动化验收测试区`. That page contains scores, issue labels, and the reviewer's unsupported-claim excerpts so the failure can be diagnosed without publishing or exposing the full manuscript in public GitHub logs. It is explicitly marked `QA_FAILED_DIAGNOSTIC_ONLY`; it is not a pending article, contains no full article body, has no READY marker, and is never sent to CMS or WeChat. A passing artifact may contain minor source-fidelity warnings; the pending-review article's body is kept free of internal QA notes, while an adjacent `M7 编辑备注` page holds the reviewer's feedback for a human editor. Only an artifact that passes the structural and independent editorial gates can be submitted as a `CREATED_PENDING_REVIEW` article page.

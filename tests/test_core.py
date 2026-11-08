@@ -63,6 +63,29 @@ def test_source_evidence_truncation_is_explicit(case):
     assert evidence["original_excerpt_truncated"] is True
 
 
+def test_artifact_deterministically_adds_missing_source_note(case, model_response, model_review):
+    response = dict(model_response)
+    response["body_markdown"] = response["body_markdown"].replace(case.source_url, "")
+    artifact = build_artifact(case, "2026-11-09", response, model_review)
+
+    assert case.source_url in artifact["body_markdown"]
+    assert "## 资料来源" in artifact["body_markdown"]
+    assert "Original source URL must appear in source note" not in artifact["qa"]["issues"]
+    assert artifact["qa"]["score"] == 100
+    assert artifact["qa"]["passes_automatic_checks"] is True
+
+
+def test_author_and_reviewer_prompts_forbid_customer_type_and_causal_inference(case, model_response):
+    author_system, _ = author_prompt(case)
+    reviewer_system, _ = reviewer_prompt(case, model_response)
+
+    assert "个人订阅" in author_system
+    assert "因果关系" in author_system
+    assert "个人订阅" in reviewer_system
+    assert "时间或因果关系" in reviewer_system
+    assert "中英混杂" in author_system
+
+
 def test_valid_story_and_artifact(case, model_response, model_review):
     system, user = author_prompt(case)
     assert "不能" in user and "JSON" in system

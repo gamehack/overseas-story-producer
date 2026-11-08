@@ -22,7 +22,7 @@ def _response(request, *, title=None):
 
 
 def test_dry_run_creates_nothing(case, model_response, model_review):
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    artifact = build_artifact(case, "01", model_response, model_review)
     verbs = []
 
     def handler(request):
@@ -38,7 +38,7 @@ def test_dry_run_creates_nothing(case, model_response, model_review):
 
 def test_commit_create_pending_not_ready(case, model_response, model_review):
     model_review["unsupported_claims"] = ["太阳能板屋顶位置无来源支持"]
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    artifact = build_artifact(case, "01", model_response, model_review)
     sent = []
 
     def handler(request):
@@ -63,11 +63,11 @@ def test_commit_create_pending_not_ready(case, model_response, model_review):
     assert result["review_note"] is not None
 
 
-def test_duplicate_period_rejected(case, model_response, model_review):
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+def test_duplicate_issue_rejected(case, model_response, model_review):
+    artifact = build_artifact(case, "01", model_response, model_review)
 
     def handler(request):
-        return _response(request, title="2026-11-09｜海外创业志｜另一篇")
+        return _response(request, title="01｜海外创业志｜另一篇")
 
     with NotionDraftWriter("not-a-real-key", PARENT_ID,
                            transport=httpx.MockTransport(handler)) as writer:
@@ -76,7 +76,7 @@ def test_duplicate_period_rejected(case, model_response, model_review):
 
 
 def test_ambiguous_post_does_not_retry(case, model_response, model_review):
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    artifact = build_artifact(case, "01", model_response, model_review)
     posts = []
 
     def handler(request):
@@ -93,7 +93,7 @@ def test_ambiguous_post_does_not_retry(case, model_response, model_review):
 
 
 def test_editorial_note_failure_does_not_retry_or_publish(case, model_response, model_review):
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    artifact = build_artifact(case, "01", model_response, model_review)
     posts = []
 
     def handler(request):
@@ -113,7 +113,7 @@ def test_editorial_note_failure_does_not_retry_or_publish(case, model_response, 
 
 def test_no_editorial_notes_does_not_create_sidecar(case, model_response, model_review):
     model_review["issues"] = []
-    artifact = build_artifact(case, "2026-11-09", model_response, model_review)
+    artifact = build_artifact(case, "01", model_response, model_review)
     posts = []
 
     def handler(request):
@@ -145,7 +145,7 @@ def test_e2e_commit_creates_isolated_container_then_pending_article(
 
     from overseas_story_producer.notion import E2E_TEST_PARENT_TITLE
 
-    artifact = build_artifact(case, "2026-11-08", model_response, model_review)
+    artifact = build_artifact(case, "02", model_response, model_review)
     test_parent_id = "33333333-3333-4333-8333-333333333333"
     article_id = "44444444-4444-4444-8444-444444444444"
     gets = []
@@ -202,7 +202,7 @@ def test_failed_qa_diagnostic_is_written_only_to_isolated_test_area(
     review["unsupported_claims"] = ["未获支持的测试陈述"]
     review["hard_fail"] = True
     review["hard_fail_reason"] = "虚构关键收入及人生事件"
-    artifact = build_artifact(case, "2026-11-08", model_response, review)
+    artifact = build_artifact(case, "02", model_response, review)
     assert not artifact["qa"]["passes_automatic_checks"]
     test_parent_id = "33333333-3333-4333-8333-333333333333"
     diagnostic_id = "55555555-5555-4555-8555-555555555555"
@@ -254,7 +254,7 @@ def test_failed_qa_diagnostic_refuses_non_e2e_or_passing_artifacts(
     writer = NotionDraftWriter("not-a-real-key", PARENT_ID,
                                transport=httpx.MockTransport(lambda request: httpx.Response(200)))
     with writer:
-        passing = build_artifact(case, "2026-11-08", model_response, model_review)
+        passing = build_artifact(case, "02", model_response, model_review)
         with pytest.raises(ProductionError, match="failed QA gate"):
             writer.create_e2e_qa_diagnostic(
                 passing, run_id="42485803401", commit=True, e2e_test=True,
@@ -263,7 +263,7 @@ def test_failed_qa_diagnostic_refuses_non_e2e_or_passing_artifacts(
         failed_review["unsupported_claims"] = ["test claim"]
         failed_review["hard_fail"] = True
         failed_review["hard_fail_reason"] = "Fabricated major milestone"
-        failed = build_artifact(case, "2026-11-08", model_response, failed_review)
+        failed = build_artifact(case, "02", model_response, failed_review)
         with pytest.raises(ProductionError, match="explicit E2E commit"):
             writer.create_e2e_qa_diagnostic(
                 failed, run_id="42485803401", commit=False, e2e_test=True,
@@ -271,7 +271,7 @@ def test_failed_qa_diagnostic_refuses_non_e2e_or_passing_artifacts(
 
 
 def test_e2e_test_mode_refuses_dry_run(case, model_response, model_review):
-    artifact = build_artifact(case, "2026-11-08", model_response, model_review)
+    artifact = build_artifact(case, "02", model_response, model_review)
     with NotionDraftWriter("not-a-real-key", PARENT_ID,
                            transport=httpx.MockTransport(lambda request: httpx.Response(200))) as writer:
         with pytest.raises(ProductionError, match="requires an explicit commit"):

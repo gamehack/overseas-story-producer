@@ -32,7 +32,7 @@ def _run(tmp_path):
     output = tmp_path / "story.json"
     result = cli.run([
         "generate", "--story-id", "11111111-1111-4111-8111-111111111111",
-        "--period", "2026-11-09", "--output", str(output),
+        "--issue-number", "01", "--output", str(output),
     ])
     return result, output
 

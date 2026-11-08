@@ -77,10 +77,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          period="$(TZ=Asia/Shanghai date +%F)"
+          # 90000+ is an isolated E2E-only issue namespace, never a published issue.
+          # Each run is unique, so re-running model tests does not reuse 01.
+          issue_number="$(( 90000 + GITHUB_RUN_NUMBER ))"
           artifact="$RUNNER_TEMP/m7-pending-artifact.json"
           python -m overseas_story_producer.cli generate \
-            --story-id "$M7_E2E_STORY_ID" --period "$period" \
+            --story-id "$M7_E2E_STORY_ID" --issue-number "$issue_number" \
             --output "$artifact" > "$RUNNER_TEMP/m7-generate-result.json"
           python - <<'PY'
           import json

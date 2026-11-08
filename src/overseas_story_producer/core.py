@@ -5,7 +5,6 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass
-from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -36,13 +35,10 @@ class Case:
     facts: tuple[Fact, ...]
 
 
-def canonical_period(value: str) -> str:
-    try:
-        d = date.fromisoformat(value)
-    except ValueError:
-        raise ProductionError("Period must be YYYY-MM-DD") from None
-    if d.isoformat() != value:
-        raise ProductionError("Period must be canonical YYYY-MM-DD")
+def canonical_issue_number(value: str) -> str:
+    """Stable publication order; a story issue is not a calendar date."""
+    if not isinstance(value, str) or not re.fullmatch(r"0[1-9]|[1-9][0-9]{1,4}", value):
+        raise ProductionError("Issue number must be canonical 01..99999")
     return value
 
 
@@ -110,9 +106,12 @@ def author_prompt(case: Case) -> tuple[str, str]:
         "只有来源明确给出时间先后或因果时才使用“之后”“因此”“促使”等连接词。"
         "不得补写原文未披露的迁移后成本、客户留存或盈利持续性；资料不足时明确留白或省略。"
         "除产品、品牌、人名及必要技术术语外，正文使用自然、完整的中文，不残留英文普通短语或中英混杂句。"
+        "标题和小标题应像自然的中文人物特写：主语与行动清楚，以人物的处境、冲突或选择为中心；"
+        "避免生硬的直译、抽象的『某某之后』修辞、没有主语的概念拼接，以及为了制造悬念误写事实。"
+        "描述多个不同入口或菜单时，绝不能未经材料支持写成多层嵌套菜单。"
         "不制造对话、人物心理、收入、因果关系或时间线；材料不足时删去或用保守措辞。"
         "不要把故事写成工具教程或营销软文。避免密集外链，仅在文末列原始来源。"
-        "请输出唯一 JSON 对象：title 为不带栏目/日期前缀的中文标题；"
+        "请输出唯一 JSON 对象：title 为不带栏目/期号/日期前缀的自然中文人物故事标题；"
         "body_markdown 为正文 Markdown（含一级标题、至少3个二级标题、文末资料来源）；"
         "facts_used 为实际使用的结构化事实 UUID 字符串数组；"
         "uncertainties 为待人工核实的句子数组。"
@@ -208,8 +207,8 @@ READY = re.compile(r"QJAI_PUBLISH_READY", re.I)
 BAD_TITLE = re.compile(r"(?:测试|草稿|失败|重复|DRAFT|TEST)", re.I)
 
 
-def evaluate(case: Case, period: str, response: dict[str, Any]) -> dict[str, Any]:
-    canonical_period(period)
+def evaluate(case: Case, issue_number: str, response: dict[str, Any]) -> dict[str, Any]:
+    canonical_issue_number(issue_number)
     title, body = response.get("title"), response.get("body_markdown")
     used, unknown = response.get("facts_used"), response.get("uncertainties")
     issues: list[str] = []
@@ -240,7 +239,7 @@ def evaluate(case: Case, period: str, response: dict[str, Any]) -> dict[str, Any
     return {"score": score, "issues": issues, "passes_automatic_checks": not issues}
 
 
-def build_artifact(case: Case, period: str, response: dict[str, Any],
+def build_artifact(case: Case, issue_number: str, response: dict[str, Any],
                    review: dict[str, Any] | None = None) -> dict[str, Any]:
     validate_case(case)
     normalized = dict(response)
@@ -251,7 +250,8 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
         if case.source_url not in body_text:
             body_text = body_text.rstrip() + "\n\n## 资料来源\n\n" + case.source_url
         normalized["body_markdown"] = body_text
-    qa = evaluate(case, period, normalized)
+    issue_number = canonical_issue_number(issue_number)
+    qa = evaluate(case, issue_number, normalized)
     editorial = review_score(review)
     qa["editorial_score"] = editorial["score"]
     qa["editorial_issues"] = editorial["issues"]
@@ -261,9 +261,9 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
     body = str(normalized.get("body_markdown", "")).strip() + "\n"
     return {
         "format_version": 1,
-        "period": period,
-        "source_key": f"overseas-stories:{period}",
-        "notion_title": f"{period}｜海外创业志｜{title}",
+        "issue_number": issue_number,
+        "source_key": f"overseas-stories:{issue_number}",
+        "notion_title": f"{issue_number}｜海外创业志｜{title}",
         "story_id": case.id,
         "original_url": case.source_url,
         "evidence_ids": normalized.get("facts_used", []),
@@ -280,11 +280,11 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
 def validate_artifact(item: dict[str, Any]) -> None:
     if item.get("format_version") != 1:
         raise ProductionError("Unsupported artifact version")
-    period = canonical_period(str(item.get("period", "")))
-    if item.get("source_key") != f"overseas-stories:{period}":
+    issue_number = canonical_issue_number(str(item.get("issue_number", "")))
+    if item.get("source_key") != f"overseas-stories:{issue_number}":
         raise ProductionError("Artifact source key mismatch")
     title = item.get("notion_title", "")
-    if not isinstance(title, str) or not title.startswith(f"{period}｜海外创业志｜"):
+    if not isinstance(title, str) or not title.startswith(f"{issue_number}｜海外创业志｜"):
         raise ProductionError("Artifact title does not match allowlisted profile")
     if BAD_TITLE.search(title) or READY.search(title):
         raise ProductionError("Forbidden title")

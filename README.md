@@ -100,3 +100,8 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 
 
 **E2E 调度保护（2026-11-08）：**首次 GitHub-hosted E2E 已实际触发，但作者请求在 120 秒 read timeout 后失败。为避免在已知上游无首字节问题尚未定位时每周重复消耗模型请求，暂时移除 weekly schedule；保持对 `src/**` 和 `pyproject.toml` 的 main push 自动触发。修复代码合并后仍会自动执行一次完整 E2E，不需要手工点击。公网网关 smoke 和无密钥离线 CI 继续照常运行。首次真实 E2E 的日志和边界见 M7 项目 Notion 文档。
+
+
+### OmniRoute / MiniMax 长响应处理
+
+生产器通过现有 OmniRoute 的 OpenAI-compatible Chat Completions 接口请求模型时，使用 `stream: true` 与 SSE。客户端逐帧收集 `choices[].delta.content`，忽略 reasoning 字段，仅在收到终止事件 `data: [DONE]` 后才解析 JSON；连接中断、缺失终止事件、格式错误或超过 800 KB 均失败关闭，不把部分内容当成完整稿件，不自动重试。保持 120 秒 read timeout，不通过延长客户端 timeout 绕过 Cloudflare Free 的 125 秒 Proxy Read Timeout。此修改需要在现网 `minimax-cn/MiniMax-M3` 路由上由自动 E2E 实测首字节和完整输出；如上游仍不流式或没有首字节，E2E 会失败并保留错误阶段。

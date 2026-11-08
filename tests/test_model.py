@@ -11,6 +11,8 @@ def _completion(api_base: str, *, allow_private_http: bool = False) -> str:
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(str(request.url))
         assert request.headers["Authorization"] == "Bearer internal-test-key"
+        assert request.headers["Accept"] == "text/event-stream"
+        assert __import__("json").loads(request.content)["stream"] is True
         return httpx.Response(
             200, json={"choices": [{"message": {"content": '{"ok": true}'}}]}
         )
@@ -135,3 +137,58 @@ def test_invalid_timeout_rejected_before_request(invalid):
             api_base="https://model.example.com/v1", api_key="internal-test-key",
             model="test-model", timeout_seconds=invalid,
         )
+
+
+
+def test_sse_stream_is_assembled_and_reasoning_is_not_included():
+    body = (
+        b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\\n\\n'
+        b'data: {"choices":[{"delta":{"reasoning_content":"hidden reasoning"}}]}\\n\\n'
+        b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\":"}}]}\\n\\n'
+        b'data: {"choices":[{"delta":{"content":" true}"}}]}\\n\\n'
+        b'data: [DONE]\\n\\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body,
+        )
+
+    assert generate_json(
+        "system", "user",
+        api_base="https://model.example.com/v1", api_key="internal-test-key",
+        model="test-model", transport=httpx.MockTransport(handler),
+    ) == {"ok": True}
+
+
+def test_sse_stream_without_done_is_rejected_as_incomplete():
+    body = b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\": true}"}}]}\\n\\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body,
+        )
+
+    with pytest.raises(ProductionError, match="ended before \\[DONE\\]"):
+        generate_json(
+            "system", "user",
+            api_base="https://model.example.com/v1", api_key="internal-test-key",
+            model="test-model", transport=httpx.MockTransport(handler),
+        )
+
+
+def test_malformed_sse_event_is_rejected_without_exposing_payload():
+    body = b'data: token=internal-test-key\\n\\n'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=body,
+        )
+
+    with pytest.raises(ProductionError, match="invalid SSE JSON") as error:
+        generate_json(
+            "system", "user",
+            api_base="https://model.example.com/v1", api_key="internal-test-key",
+            model="test-model", transport=httpx.MockTransport(handler),
+        )
+    assert "internal-test-key" not in str(error.value)

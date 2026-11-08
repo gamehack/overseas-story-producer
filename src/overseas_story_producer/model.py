@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 from urllib.parse import urlparse
 
 import httpx
@@ -40,9 +41,12 @@ def _completion_url(api_base: str, *, allow_private_http: bool) -> str:
 
 def generate_json(system: str, user: str, *, api_base: str, api_key: str,
                   model: str, allow_private_http: bool = False,
+                  timeout_seconds: float = 120.0,
                   transport: httpx.BaseTransport | None = None) -> dict:
     if not api_base or not api_key or not model:
         raise ProductionError("Model URL, API key, and model are required")
+    if not isinstance(timeout_seconds, (int, float)) or not math.isfinite(timeout_seconds) or not 10 <= timeout_seconds <= 300:
+        raise ProductionError("Model timeout must be between 10 and 300 seconds")
     url = _completion_url(api_base, allow_private_http=allow_private_http)
     payload = {
         "model": model,
@@ -51,7 +55,7 @@ def generate_json(system: str, user: str, *, api_base: str, api_key: str,
                      {"role": "user", "content": user}],
     }
     try:
-        with httpx.Client(timeout=120, transport=transport, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout_seconds, transport=transport, follow_redirects=False) as client:
             response = client.post(url, json=payload, headers={
                 "Authorization": "Bearer " + api_key,
                 "Content-Type": "application/json",
@@ -63,7 +67,17 @@ def generate_json(system: str, user: str, *, api_base: str, api_key: str,
             raise ValueError("Unexpected content")
     except ProductionError:
         raise
-    except (httpx.HTTPError, KeyError, IndexError, ValueError, TypeError):
-        raise ProductionError("Model connection or response failed") from None
+    except httpx.ConnectTimeout:
+        raise ProductionError("Model timeout (connect)") from None
+    except httpx.ReadTimeout:
+        raise ProductionError("Model timeout (read)") from None
+    except httpx.WriteTimeout:
+        raise ProductionError("Model timeout (write)") from None
+    except httpx.PoolTimeout:
+        raise ProductionError("Model timeout (pool)") from None
+    except httpx.HTTPError:
+        raise ProductionError("Model transport failure") from None
+    except (KeyError, IndexError, ValueError, TypeError):
+        raise ProductionError("Model response format invalid") from None
     return unpack_model_json(content)
 

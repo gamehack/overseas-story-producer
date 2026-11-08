@@ -17,15 +17,15 @@
 ```bash
 overseas-story-producer generate \
   --story-id '00000000-0000-4000-8000-000000000000' \
-  --period 2026-11-09 --output outputs/2026-11-09.json
+  --issue-number 01 --output outputs/01.json
 
-overseas-story-producer inspect --input outputs/2026-11-09.json
+overseas-story-producer inspect --input outputs/01.json
 
 # 默认仅模拟：查询 07 的唯一性、不创建任何页面
-overseas-story-producer submit --input outputs/2026-11-09.json
+overseas-story-producer submit --input outputs/01.json
 
 # 允许后，才创建“待人工验收”页面，绝不添加 READY
-overseas-story-producer submit --input outputs/2026-11-09.json --commit
+overseas-story-producer submit --input outputs/01.json --commit
 ```
 
 工具会拒绝覆盖本地成稿、拒绝重复期号/来源键、阻止无证据事实 ID、阻止缺失原始来源、阻止包含 READY 的成稿；Notion POST 超时或结果不确定时 **不自动重试**。
@@ -33,8 +33,8 @@ overseas-story-producer submit --input outputs/2026-11-09.json --commit
 ## 编辑与发布分工
 
 1. 编辑人工检查人物情节/真实性归属/数据引用/著作权，使用组织内部 M7 编辑质量规范。本地 QA 只是第一道启发式筛查，不是事实核验或最终评分。
-2. 人工确认后，按照两个发布器的 README，在页面末尾添加与 Notion 实际 Markdown 相符的 `QJAI_PUBLISH_READY v=1 source_key=overseas-stories:YYYY-MM-DD content_sha256=<64位SHA256>`。MD 标准化为 `rstrip()+"\n"` 后计算摘要。标记必须是正文最后一行；任何后续修改都要求重新签署。
-3. 手工触发 `cms-publisher --profile overseas --period YYYY-MM-DD` 和 `mp-publisher` 对应的单期 `overseas` 命令；两者默认均关闭，必须分别检查 CMS 分类与微信封面、状态、密钥及 IP 白名单。
+2. 人工确认后，按照两个发布器的 README，在页面末尾添加与 Notion 实际 Markdown 相符的 `QJAI_PUBLISH_READY v=1 source_key=overseas-stories:01 content_sha256=<64位SHA256>`。MD 标准化为 `rstrip()+"\n"` 后计算摘要。标记必须是正文最后一行；任何后续修改都要求重新签署。
+3. 手工触发 `cms-publisher --profile overseas --issue 01` 和 `mp-publisher` 对应的单期 `overseas` 命令；两者默认均关闭，必须分别检查 CMS 分类与微信封面、状态、密钥及 IP 白名单。
 4. 编辑人员确认 CMS 草稿与微信公众号草稿内容无误后，再由人操作发布。
 
 ## 数据质量与安全限制
@@ -46,7 +46,7 @@ overseas-story-producer submit --input outputs/2026-11-09.json --commit
 - 复用现有 OmniRoute 时，为避免首轮生成消耗模型速率预算，首次成功返回后默认等待 **90 秒**再发起独立质检；可通过 `OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS` 配置 0–600 秒（测试可置 0）。这不是重试：任何一次 HTTP 429 / 超时均立即停止，不会自动再次发送请求；需先检查网关限流规则再人工决定是否重新启动。
 - `OPENAI_COMPAT_TIMEOUT_SECONDS` 默认 `120` 秒，可配置 `10`–`300` 秒；分别输出 connect/read/write/pool 超时错误，并标记 author/reviewer 阶段，绝不记录完整请求、URL 或密钥。**此开关不执行任何重试，修改超时前须先核实 OmniRoute 上游超时层级及主机资源；MVP 暂不自行调整现网默认值。**
 - 自动检查标题、章节、来源、字数、证据 ID、READY 泄漏；模型二次审阅不能替代人工查阅来源或确认版权。
-- 一个 `YYYY-MM-DD` 期号只对应一个 Notion 子页面；故事中包含主来源 URL 与案例/事实 UUID 供溯源。
+- 一个不依赖日期的序号（`01`、`02`、...）只对应一个 Notion 子页面；标题为 `01｜海外创业志｜中文人物故事标题`，唯一来源键为 `overseas-stories:01`。故事中包含主来源 URL 与案例/事实 UUID 供溯源。
 - 读取时严格复算 M4 `story_source_hash`、使用只返回最新翻译事实的 `localized_facts` 视图，源数据或翻译过期则拒绝生成。
 - **未完成的上线前验收项**：复核现有模型成本/合规、人工抽检样稿、将代码入新独立 GitHub 仓库并运行 CI、服务器运行账号与调度错峰。
 
@@ -64,7 +64,7 @@ docker build -t overseas-story-producer:local .
 docker run --rm --env-file /opt/overseas-story-producer/.env \
   --mount type=bind,src=/opt/overseas-story-producer/outputs,dst=/outputs \
   overseas-story-producer:local generate \
-  --story-id '<case-uuid>' --period YYYY-MM-DD --output /outputs/YYYY-MM-DD.json
+  --story-id '<case-uuid>' --issue-number 01 --output /outputs/01.json
 ```
 
 Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；首次模型、Supabase 和 Notion 端到端验收前不得启用任何定时任务。
@@ -97,7 +97,7 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 
 ### 完整端到端验收的 Notion 写入边界
 
-当 `M7_E2E_ENABLED=true` 时，自动 E2E 不再只做 Notion dry-run，而是执行真实的 `submit --commit --e2e-test`。首次运行会在 `NOTION_PARENT_PAGE_ID` 下创建唯一的 `M7 自动化验收测试区` 子页面；随后只在这个测试区内创建当日期号的 `PENDING_HUMAN_REVIEW` 文章页，必要时创建并列的 `M7 编辑备注` 页面供人工审阅。编辑备注包含 QA 意见，不包含完整正文，且不匹配发布器的文章标题前缀。它不会在正式 `07 · 海外创业志` 根目录直接创建测试文章，不写 READY，不触碰 CMS/公众号，也不自动归档/删除测试页。测试页留存以便检查，后续同一期号重跑会被唯一性保护拒绝。若 Notion POST 返回结果不确定，工作流失败且不自动重试；必须先核对 Notion 测试区再处理。
+当 `M7_E2E_ENABLED=true` 时，自动 E2E 不再只做 Notion dry-run，而是执行真实的 `submit --commit --e2e-test`。首次运行会在 `NOTION_PARENT_PAGE_ID` 下创建唯一的 `M7 自动化验收测试区` 子页面；随后只在这个测试区内创建 `PENDING_HUMAN_REVIEW` 文章页，必要时创建并列的 `M7 编辑备注` 页面供人工审阅。为避免与正式期号 `01` 冲突，每次自动测试使用独立的 `90000 + GitHub run_number` 测试期号，仅写入测试区，不代表正式专栏期次。编辑备注包含 QA 意见，不包含完整正文，且不匹配发布器的文章标题前缀。它不会在正式 `07 · 海外创业志` 根目录直接创建测试文章，不写 READY，不触碰 CMS/公众号，也不自动归档/删除测试页。测试页留存以便检查，后续同一期号重跑会被唯一性保护拒绝。若 Notion POST 返回结果不确定，工作流失败且不自动重试；必须先核对 Notion 测试区再处理。
 
 
 **E2E 调度保护（2026-11-08）：**首次 GitHub-hosted E2E 已实际触发，但作者请求在 120 秒 read timeout 后失败。为避免在已知上游无首字节问题尚未定位时每周重复消耗模型请求，暂时移除 weekly schedule；保持对 `src/**` 和 `pyproject.toml` 的 main push 自动触发。修复代码合并后仍会自动执行一次完整 E2E，不需要手工点击。公网网关 smoke 和无密钥离线 CI 继续照常运行。首次真实 E2E 的日志和边界见 M7 项目 Notion 文档。

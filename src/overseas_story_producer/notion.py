@@ -5,7 +5,7 @@ from uuid import UUID
 
 import httpx
 
-from .core import ProductionError, canonical_period, validate_artifact
+from .core import ProductionError, canonical_issue_number, validate_artifact
 
 
 NOTION_API = "https://api.notion.com/v1"
@@ -190,7 +190,7 @@ class NotionDraftWriter:
         if (not isinstance(notes, list) or len(notes) > 20 or
                 not all(isinstance(note, str) and 0 < len(note) <= 1000 for note in notes)):
             raise ProductionError("Editorial review notes exceed safe bounds")
-        title = f"M7 编辑备注｜{artifact['period']}｜{article_id}"
+        title = f"M7 编辑备注｜{artifact['issue_number']}｜{article_id}"
         blocks = [
             _block("heading_1", "内部编辑备注｜不是文章正文"),
             _block("paragraph", "仅供人工审阅，不得添加 READY、进入 CMS 或微信公众号发布流程。"),
@@ -244,7 +244,7 @@ class NotionDraftWriter:
                 or not isinstance(issues, list) or not all(isinstance(x, str) and 0 < len(x) <= 500 for x in issues)
                 or len(issues) > 20 or type(hard_fail) is not bool):
             raise ProductionError("QA diagnostic fields failed validation")
-        period = canonical_period(artifact.get("period", ""))
+        issue_number = canonical_issue_number(artifact.get("issue_number", ""))
         try:
             story_id = str(UUID(str(artifact.get("story_id", ""))))
         except (ValueError, TypeError, AttributeError):
@@ -259,7 +259,7 @@ class NotionDraftWriter:
         if (type(score) is not int or not 0 <= score <= 100
                 or type(editorial_score) is not int or not 0 <= editorial_score <= 100):
             raise ProductionError("Invalid QA score in diagnostic artifact")
-        title = f"E2E QA诊断｜{period}｜run-{run_id}"
+        title = f"E2E QA诊断｜{issue_number}｜run-{run_id}"
         blocks = [
             _block("heading_1", "自动化质检未通过｜仅供排障，不是文章草稿"),
             _block("paragraph", "状态：QA_FAILED_DIAGNOSTIC_ONLY。此页不是待发布文章，不得进入 READY、CMS 或微信公众号发布流程。"),
@@ -309,8 +309,8 @@ class NotionDraftWriter:
         validate_artifact(artifact)
         if e2e_test and not commit:
             raise ProductionError("E2E test mode requires an explicit commit to the isolated test area")
-        period = artifact["period"]
-        prefix = f"{period}｜海外创业志｜"
+        issue_number = artifact["issue_number"]
+        prefix = f"{issue_number}｜海外创业志｜"
         blocks = _to_blocks(artifact["body_markdown"],
                             story_id=artifact["story_id"],
                             evidence_ids=artifact["evidence_ids"])

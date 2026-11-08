@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from .core import (ProductionError, author_prompt, build_artifact, canonical_period,
+from .core import (ProductionError, author_prompt, build_artifact, canonical_issue_number,
                    reviewer_prompt, validate_artifact)
 from .model import generate_json
 from .notion import NotionDraftWriter
@@ -46,7 +46,7 @@ def run(argv: list[str] | None = None) -> dict:
     sub = parser.add_subparsers(dest="command", required=True)
     g = sub.add_parser("generate", help="Generate a local pending-review artifact")
     g.add_argument("--story-id", required=True)
-    g.add_argument("--period", required=True)
+    g.add_argument("--issue-number", required=True, help="Publication issue, e.g. 01; never a date")
     g.add_argument("--output", type=Path, required=True)
     s = sub.add_parser("submit", help="Submit a pending story to Notion, not to publishers")
     s.add_argument("--input", type=Path, required=True)
@@ -62,7 +62,7 @@ def run(argv: list[str] | None = None) -> dict:
     args = parser.parse_args(argv)
 
     if args.command == "generate":
-        period = canonical_period(args.period)
+        issue_number = canonical_issue_number(args.issue_number)
         review_cooldown = _review_cooldown_seconds()
         model_timeout = _model_timeout_seconds()
         case = load_case(os.getenv("DATABASE_URL", ""), args.story_id)
@@ -97,7 +97,7 @@ def run(argv: list[str] | None = None) -> dict:
             )
         except ProductionError as exc:
             raise ProductionError(f"Reviewer stage: {exc}") from None
-        item = build_artifact(case, period, model_result, review_result)
+        item = build_artifact(case, issue_number, model_result, review_result)
         # The output remains an artifact even when QA fails, for editor review.
         if args.output.exists():
             raise ProductionError("Refusing to overwrite existing artifact")

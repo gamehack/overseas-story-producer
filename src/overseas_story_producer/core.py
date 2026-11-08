@@ -236,7 +236,7 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
         body_text = raw_body.strip()
         # Deterministically enforce the source-note contract; this adds no new claim.
         if case.source_url not in body_text:
-            body_text = body_text.rstrip() + "\\n\\n## 资料来源\\n\\n" + case.source_url
+            body_text = body_text.rstrip() + "\n\n## 资料来源\n\n" + case.source_url
         normalized["body_markdown"] = body_text
     qa = evaluate(case, period, normalized)
     editorial = review_score(review)
@@ -244,7 +244,7 @@ def build_artifact(case: Case, period: str, response: dict[str, Any],
     qa["editorial_issues"] = editorial["issues"]
     qa["passes_automatic_checks"] = bool(qa["passes_automatic_checks"] and editorial["passes"])
     title = str(normalized.get("title", "")).strip()
-    body = str(normalized.get("body_markdown", "")).strip() + "\\n"
+    body = str(normalized.get("body_markdown", "")).strip() + "\n"
     return {
         "format_version": 1,
         "period": period,

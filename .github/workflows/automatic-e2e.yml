@@ -37,7 +37,7 @@ jobs:
       NOTION_PARENT_PAGE_ID: ${{ secrets.M7_NOTION_PARENT_PAGE_ID }}
       M7_SUPABASE_CA_PEM: ${{ secrets.M7_SUPABASE_CA_PEM }}
       M7_E2E_STORY_ID: ${{ vars.M7_E2E_STORY_ID }}
-      PGSSLROOTCERT: ${{ runner.temp }}/m7-supabase-ca.pem
+      PGSSLROOTCERT: /tmp/m7-supabase-ca.pem
 
     steps:
       - uses: actions/checkout@v4

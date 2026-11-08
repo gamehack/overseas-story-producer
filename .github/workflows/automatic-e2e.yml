@@ -1,0 +1,93 @@
+name: M7 automatic E2E validation
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'pyproject.toml'
+      - '.github/workflows/automatic-e2e.yml'
+  schedule:
+    # Every Monday 06:43 Asia/Shanghai, after the existing 03:30 collector.
+    - cron: '43 22 * * 0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m7-automatic-e2e
+  cancel-in-progress: false
+
+jobs:
+  end-to-end:
+    # Fail closed while the one-time GitHub environment/secret provisioning is incomplete.
+    # No human-triggered run or per-run reviewer approval is required after provisioning.
+    if: ${{ vars.M7_E2E_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: m7-integration
+    env:
+      DATABASE_URL: ${{ secrets.M7_DATABASE_URL }}
+      OPENAI_COMPAT_BASE_URL: https://omniroute.qjai.org/v1
+      OPENAI_COMPAT_API_KEY: ${{ secrets.M7_OMNIROUTE_API_KEY }}
+      OPENAI_COMPAT_MODEL: ${{ vars.M7_E2E_MODEL || 'MiniMax-M3' }}
+      OPENAI_COMPAT_ALLOW_PRIVATE_HTTP: 'false'
+      OPENAI_COMPAT_TIMEOUT_SECONDS: '120'
+      OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS: '90'
+      NOTION_API_KEY: ${{ secrets.M7_NOTION_API_KEY }}
+      NOTION_PARENT_PAGE_ID: ${{ secrets.M7_NOTION_PARENT_PAGE_ID }}
+      M7_SUPABASE_CA_PEM: ${{ secrets.M7_SUPABASE_CA_PEM }}
+      M7_E2E_STORY_ID: ${{ vars.M7_E2E_STORY_ID }}
+      PGSSLROOTCERT: ${{ runner.temp }}/m7-supabase-ca.pem
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate configuration and install CA without logging secrets
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from uuid import UUID
+
+          required = (
+              "DATABASE_URL", "OPENAI_COMPAT_API_KEY",
+              "OPENAI_COMPAT_MODEL", "NOTION_API_KEY",
+              "NOTION_PARENT_PAGE_ID", "M7_SUPABASE_CA_PEM",
+              "M7_E2E_STORY_ID",
+          )
+          absent = [name for name in required if not os.environ.get(name)]
+          if absent:
+              raise SystemExit("Missing integration configuration names: " + ", ".join(absent))
+          if "sslrootcert=" in os.environ["DATABASE_URL"].lower():
+              raise SystemExit("Use a portable DATABASE_URL without sslrootcert; PGSSLROOTCERT provides the CA path")
+          if "sslmode=verify-full" not in os.environ["DATABASE_URL"].lower():
+              raise SystemExit("DATABASE_URL must explicitly require sslmode=verify-full")
+          UUID(os.environ["M7_E2E_STORY_ID"])
+          UUID(os.environ["NOTION_PARENT_PAGE_ID"])
+          path = Path(os.environ["PGSSLROOTCERT"])
+          path.write_text(os.environ["M7_SUPABASE_CA_PEM"], encoding="ascii")
+          path.chmod(0o600)
+          print("Integration configuration is present; CA is ready")
+          PY
+
+      - name: Install production package
+        run: python -m pip install .
+
+      - name: Generate, quality-check and perform Notion read-only dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          period="$(TZ=Asia/Shanghai date +%F)"
+          artifact="$RUNNER_TEMP/m7-pending-artifact.json"
+          python -m overseas_story_producer.cli generate \
+            --story-id "$M7_E2E_STORY_ID" --period "$period" \
+            --output "$artifact" > "$RUNNER_TEMP/m7-generate-result.json"
+          python -m overseas_story_producer.cli inspect \
+            --input "$artifact" > "$RUNNER_TEMP/m7-inspect-result.json"
+          python -m overseas_story_producer.cli submit \
+            --input "$artifact" > "$RUNNER_TEMP/m7-notion-dryrun-result.json"
+          echo "M7 automatic end-to-end validation PASS: generator, reviewer and Notion read-only dry-run. No READY or publication." >> "$GITHUB_STEP_SUMMARY"

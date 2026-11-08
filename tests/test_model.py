@@ -142,11 +142,11 @@ def test_invalid_timeout_rejected_before_request(invalid):
 
 def test_sse_stream_is_assembled_and_reasoning_is_not_included():
     body = (
-        b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\\n\\n'
-        b'data: {"choices":[{"delta":{"reasoning_content":"hidden reasoning"}}]}\\n\\n'
-        b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\":"}}]}\\n\\n'
-        b'data: {"choices":[{"delta":{"content":" true}"}}]}\\n\\n'
-        b'data: [DONE]\\n\\n'
+        b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n'
+        b'data: {"choices":[{"delta":{"reasoning_content":"hidden reasoning"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\":"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"content":" true}"}}]}\n\n'
+        b'data: [DONE]\n\n'
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -162,7 +162,7 @@ def test_sse_stream_is_assembled_and_reasoning_is_not_included():
 
 
 def test_sse_stream_without_done_is_rejected_as_incomplete():
-    body = b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\": true}"}}]}\\n\\n'
+    body = b'data: {"choices":[{"delta":{"content":"{\\\"ok\\\": true}"}}]}\n\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -178,7 +178,7 @@ def test_sse_stream_without_done_is_rejected_as_incomplete():
 
 
 def test_malformed_sse_event_is_rejected_without_exposing_payload():
-    body = b'data: token=internal-test-key\\n\\n'
+    body = b'data: token=internal-test-key\n\n'
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

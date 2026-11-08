@@ -1,6 +1,7 @@
 """Submit only unapproved Notion child pages, with fail-closed idempotency."""
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 import httpx
@@ -131,6 +132,78 @@ class NotionDraftWriter:
         if len(matches) > 1:
             raise ProductionError("Multiple M7 E2E test containers found; refusing ambiguous write")
         return matches[0] if matches else None
+
+    def production_inventory(self) -> tuple[int, set[str], int]:
+        """Read all published-series pages before assigning a new serial.
+
+        This rejects missing case IDs and serial gaps instead of guessing an
+        unused number, and counts unapproved drafts to bound editorial backlog.
+        """
+        serials: set[int] = set()
+        used_story_ids: set[str] = set()
+        pending = 0
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            params: dict[str, object] = {"page_size": 100}
+            if cursor:
+                params["start_cursor"] = cursor
+            data = self._get(f"/blocks/{self.parent_id}/children", params)
+            children = data.get("results")
+            if not isinstance(children, list) or not isinstance(data.get("has_more"), bool):
+                raise ProductionError("Cannot verify full production inventory")
+            for child in children:
+                if not isinstance(child, dict):
+                    raise ProductionError("Invalid Notion child block")
+                if child.get("type") != "child_page":
+                    continue
+                title = (child.get("child_page") or {}).get("title", "")
+                if not isinstance(title, str):
+                    raise ProductionError("Invalid Notion child title")
+                match = re.match(r"^海外创业志 (0[1-9]|[1-9][0-9]{1,4})\|", title)
+                if not match:
+                    continue
+                serial = int(match.group(1))
+                if serial in serials:
+                    raise ProductionError("Duplicate issue number in Notion")
+                serials.add(serial)
+                page_id = child.get("id", "")
+                try:
+                    page_id = str(UUID(page_id))
+                except (TypeError, ValueError, AttributeError):
+                    raise ProductionError("Invalid Notion child page ID") from None
+                markdown = self._get(f"/pages/{page_id}/markdown", {"markdown_version": "v2"})
+                if (markdown.get("object") != "page_markdown" or
+                        not isinstance(markdown.get("markdown"), str) or
+                        markdown.get("truncated") is not False or
+                        markdown.get("unknown_block_ids") not in ([], None) or
+                        markdown.get("warnings") not in ([], None)):
+                    raise ProductionError("Cannot verify existing article content")
+                body = markdown["markdown"]
+                ids = re.findall(r"档案编号：([0-9a-fA-F-]{36})", body)
+                if len(ids) != 1:
+                    raise ProductionError("Existing article has no unambiguous case ID")
+                try:
+                    story_id = str(UUID(ids[0]))
+                except ValueError:
+                    raise ProductionError("Invalid existing story ID") from None
+                if story_id in used_story_ids:
+                    raise ProductionError("Same source story appears in multiple issues")
+                used_story_ids.add(story_id)
+                if not re.search(r"QJAI\\?_PUBLISH\\?_READY\s+v=1", body):
+                    pending += 1
+            if not data["has_more"]:
+                break
+            cursor = data.get("next_cursor")
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise ProductionError("Cannot verify Notion pagination")
+            seen_cursors.add(cursor)
+        if serials and sorted(serials) != list(range(1, max(serials) + 1)):
+            raise ProductionError("Notion series has a missing issue; manual reconciliation required")
+        next_number = max(serials, default=0) + 1
+        if next_number > 99999:
+            raise ProductionError("Series issue number exhausted")
+        return next_number, used_story_ids, pending
 
     def _ensure_e2e_test_parent(self) -> str:
         existing = self._find_child_page(self.parent_id, E2E_TEST_PARENT_TITLE)

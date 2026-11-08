@@ -30,7 +30,7 @@ def test_reviewer_receives_same_archived_evidence_as_author(case, model_response
         "body_markdown": model_response["body_markdown"],
     }
     assert "中文摘要" in reviewer_system
-    assert "原文摘录" in reviewer_system
+    assert "原始叙事正文" in reviewer_system
     assert "不得仅因某句不在结构化 facts 数组中" in reviewer_system
 
 

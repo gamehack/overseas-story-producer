@@ -105,3 +105,10 @@ Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；
 ### OmniRoute / MiniMax 长响应处理
 
 生产器通过现有 OmniRoute 的 OpenAI-compatible Chat Completions 接口请求模型时，使用 `stream: true` 与 SSE。客户端逐帧收集 `choices[].delta.content`，忽略 reasoning 字段，仅在收到终止事件 `data: [DONE]` 后才解析 JSON；连接中断、缺失终止事件、格式错误或超过 800 KB 均失败关闭，不把部分内容当成完整稿件，不自动重试。保持 120 秒 read timeout，不通过延长客户端 timeout 绕过 Cloudflare Free 的 125 秒 Proxy Read Timeout。此修改需要在现网 `minimax-cn/MiniMax-M3` 路由上由自动 E2E 实测首字节和完整输出；如上游仍不流式或没有首字节，E2E 会失败并保留错误阶段。
+
+
+### Model transport: SSE streaming
+
+The producer requests OpenAI-compatible Chat Completions with `stream=true` and `Accept: text/event-stream`. For SSE responses it concatenates `choices[].delta.content` chunks, ignores reasoning-only fields, and accepts the result only after the terminal `[DONE]` event. An interrupted or malformed stream fails closed and is never submitted to Notion. For compatible gateways that ignore the stream preference and return a regular JSON completion, the producer retains the non-streaming JSON response fallback. The same bounded response size and per-read HTTP timeout apply.
+
+Streaming is intended to let the client receive response bytes as they are generated, reducing idle time on the Cloudflare-proxied connection. It does **not** guarantee that a provider will emit its first token before Cloudflare's 125-second Free-plan proxy read timeout. The first post-merge E2E remains the required live verification; no model request is made by unit tests or CI.

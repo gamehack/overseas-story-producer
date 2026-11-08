@@ -68,3 +68,27 @@ docker run --rm --env-file /opt/overseas-story-producer/.env \
 
 Dockerfile 默认使用非 root UID 10001。此项目暂不包含自动调度；首次模型、Supabase 和 Notion 端到端验收前不得启用任何定时任务。
 
+
+## 自动化测试（GitHub Actions）
+
+测试不使用手工 `workflow_dispatch`，也不把人工执行 CLI 当作 CI 验收：
+
+| 测试层 | 触发器 | 凭据与外部影响 | 成功标准 |
+| --- | --- | --- | --- |
+| `ci.yml` | 每次 PR / push | 不接触密钥、无外部业务写入 | 全量离线测试通过（含网关模拟验证） |
+| `public-gateway-smoke.yml` | 每次 `main` push + 北京时间每天 05:17 | 无密钥；一次 HTTPS GET，不调用模型 | 系统 TLS 验证正常、目标域名应用认证返回 HTTP 401 |
+| `automatic-e2e.yml` | 涉及生产源码的 `main` push + 每周一北京时间 06:43 | 在信任的 `main` Runner 上调用 Supabase 只读、已有 OmniRoute 两次模型调用及 Notion 唯一期号只读查询；**不创建页面** | 生成成功、M7 独立审稿 ≥85、inspect 通过、Notion dry-run 通过 |
+
+**注意：**网关 HTTP 401 成功，只证明公开路由、TLS、无凭据时的认证边界，不等于模型实际推理通过。GitHub Actions 的完整 E2E 仅在仓库变量 `M7_E2E_ENABLED=true` 后自动执行；未启用时其 job 为 **skipped，绝非集成验收通过**。此开关避免公开仓库尚未配置凭据时产生计费、泄漏或反复失败。启用后不需要人工点击每次测试，但必须先一次性配置可信环境 `m7-integration` 与密钥。
+
+一次性配置，不属于每次测试动作：
+
+- GitHub Secrets：`M7_DATABASE_URL`、`M7_OMNIROUTE_API_KEY`、`M7_NOTION_API_KEY`、`M7_NOTION_PARENT_PAGE_ID`、`M7_SUPABASE_CA_PEM`。
+- GitHub Variables：`M7_E2E_STORY_ID`（选定来源案例 UUID）、`M7_E2E_MODEL`（可选）、`M7_E2E_ENABLED`（全部准备完成才设 `true`）。
+- `M7_DATABASE_URL` 必须设置 `sslmode=verify-full`，不要携带仅在硅谷主机存在的绝对路径 `sslrootcert`；CA 通过 Runner 临时文件与 `PGSSLROOTCERT` 注入。
+- 保护 `main` 的代码变更审核权限和 `m7-integration` 环境的可访问分支。自动测试不配置每次运行必须批准的 Environment reviewer，否则又会引入人工执行环节。
+- 公共仓库 PR 测试不使用生产密钥；CI 不使用 `pull_request_target`。真实 E2E 一次最多触发作者及审稿各一次请求，错误即停，不自动重试或补跑，不公开原文和 JSON Artifact。
+- 定时 GitHub Actions 可能延迟；公开仓库在长期无活动时可能停用定时触发。定时执行状态需要独立监控。
+- 所有生产稿仍需人工审阅才能写 `QJAI_PUBLISH_READY`；此要求是出版审批，不是测试执行前置条件。
+
+既有本地 `generate / inspect / submit` 命令仅供应急排障和编辑复核；正常验收使用上述自动化工作流。**本版自动 E2E 是只读/无 Notion 写入的联通与质量测试，不等同正式生产投递已经上线。**

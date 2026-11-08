@@ -107,6 +107,8 @@ def author_prompt(case: Case) -> tuple[str, str]:
         "不得补写原文未披露的迁移后成本、客户留存或盈利持续性；资料不足时明确留白或省略。"
         "除产品、品牌、人名及必要技术术语外，正文使用自然、完整的中文，不残留英文普通短语或中英混杂句。"
         "标题和小标题应像自然的中文人物特写：主语与行动清楚，以人物的处境、冲突或选择为中心；"
+        "人物故事标题须简练，连同最终栏目和期号前缀『海外创业志 01|』后的完整标题不能超过64个UTF-8字节，"
+        "建议故事标题控制在约15个汉字内；标题要完整自然，不为压缩而生硬截断。"
         "避免生硬的直译、抽象的『某某之后』修辞、没有主语的概念拼接，以及为了制造悬念误写事实。"
         "描述多个不同入口或菜单时，绝不能未经材料支持写成多层嵌套菜单。"
         "不制造对话、人物心理、收入、因果关系或时间线；材料不足时删去或用保守措辞。"
@@ -214,6 +216,8 @@ def evaluate(case: Case, issue_number: str, response: dict[str, Any]) -> dict[st
     issues: list[str] = []
     if not isinstance(title, str) or not title.strip() or len(title) > 100 or BAD_TITLE.search(title):
         issues.append("Invalid or forbidden title")
+    elif len(f"海外创业志 {issue_number}|{title.strip()}".encode("utf-8")) > 64:
+        issues.append("Overseas title exceeds 64 UTF-8 bytes")
     if not isinstance(body, str) or len(body.strip()) < 600 or len(body) > 18000:
         issues.append("Story length outside minimum/maximum bounds")
         body = body if isinstance(body, str) else ""
@@ -286,6 +290,8 @@ def validate_artifact(item: dict[str, Any]) -> None:
     title = item.get("notion_title", "")
     if not isinstance(title, str) or not title.startswith(f"海外创业志 {issue_number}|"):
         raise ProductionError("Artifact title does not match allowlisted profile")
+    if len(title.encode("utf-8")) > 64:
+        raise ProductionError("Artifact title exceeds 64 UTF-8 bytes")
     if BAD_TITLE.search(title) or READY.search(title):
         raise ProductionError("Forbidden title")
     try:

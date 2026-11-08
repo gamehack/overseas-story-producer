@@ -107,6 +107,17 @@ def test_fail_closed_on_unknown_facts(case, model_response):
     assert not evaluate(case, "01", model_response)["passes_automatic_checks"]
 
 
+def test_story_title_fits_shared_wechat_and_cms_limit(case, model_response):
+    title = "不想开会的程序员，做起招标生意"
+    model_response["title"] = title
+    assert len(f"海外创业志 01|{title}".encode("utf-8")) == 64
+    assert evaluate(case, "01", model_response)["passes_automatic_checks"]
+    model_response["title"] = "不想再开会的程序员，一个人做起了招标生意"
+    result = evaluate(case, "01", model_response)
+    assert "Overseas title exceeds 64 UTF-8 bytes" in result["issues"]
+    assert result["passes_automatic_checks"] is False
+
+
 def test_fail_closed_on_ready_injection(case, model_response, model_review):
     model_response["body_markdown"] += "\nQJAI_PUBLISH_READY test"
     artifact = build_artifact(case, "01", model_response, model_review)

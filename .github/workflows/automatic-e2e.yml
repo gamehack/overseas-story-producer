@@ -15,9 +15,11 @@ concurrency:
 
 jobs:
   end-to-end:
-    # Fail closed while the one-time GitHub environment/secret provisioning is incomplete.
-    # No human-triggered run or per-run reviewer approval is required after provisioning.
-    if: ${{ vars.M7_E2E_ENABLED == 'true' }}
+    # M7 integration testing ended after the first accepted issue. The old
+    # M7_E2E_ENABLED variable may still be true: require a separate explicit
+    # reactivation so source pushes never recreate the deleted test area.
+    # CI and public smoke continue independently.
+    if: ${{ vars.M7_E2E_ENABLED == 'true' && vars.M7_E2E_ACTIVE == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: m7-integration
@@ -97,6 +99,7 @@ jobs:
 
           allowed_automatic_issues = {
               "Invalid or forbidden title",
+            "Overseas title exceeds 64 UTF-8 bytes",
               "Story length outside minimum/maximum bounds",
               "Producer must never emit a READY marker",
               "facts_used must be an array of UUIDs",

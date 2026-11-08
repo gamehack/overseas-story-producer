@@ -66,7 +66,7 @@ def validate_case(case: Case) -> None:
 
 
 _ADVICE_BLOCK = re.compile(
-    r"(?ms)^:::advice\\{[^\\n]*\\}\\r?\\n.*?^:::\\s*(?:\\r?\\n|$)"
+    r"(?ms)^:::advice\{[^\n]*\}\r?\n.*?^:::\s*(?:\r?\n|$)"
 )
 _MAX_SOURCE_TEXT_CHARS = 20_000
 

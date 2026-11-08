@@ -1,0 +1,28 @@
+name: Public gateway smoke
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 05:17 Asia/Shanghai; no model calls or credentials.
+    - cron: '17 21 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m7-public-gateway-smoke
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install production dependencies
+        run: python -m pip install .
+      - name: Check public DNS, TLS and authentication boundary
+        run: python -m overseas_story_producer.gateway_probe

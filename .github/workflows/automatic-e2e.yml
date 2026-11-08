@@ -82,6 +82,88 @@ jobs:
           python -m overseas_story_producer.cli generate \
             --story-id "$M7_E2E_STORY_ID" --period "$period" \
             --output "$artifact" > "$RUNNER_TEMP/m7-generate-result.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result_path = Path(os.environ["RUNNER_TEMP"]) / "m7-generate-result.json"
+          result = json.loads(result_path.read_text(encoding="utf-8"))
+          qa = result.get("qa") if isinstance(result, dict) else None
+          if not isinstance(qa, dict):
+              raise SystemExit("Missing QA diagnostics in generator result")
+
+          allowed_automatic_issues = {
+              "Invalid or forbidden title",
+              "Story length outside minimum/maximum bounds",
+              "Producer must never emit a READY marker",
+              "facts_used must be an array of UUIDs",
+              "Model referenced facts absent from evidence bundle",
+              "Too few traceable source facts",
+              "uncertainties must be an array of strings",
+              "Story needs at least three readable sections",
+              "Original source URL must appear in source note",
+              "Story must begin with a Markdown H1",
+          }
+          automatic_issues = qa.get("issues", [])
+          editorial_issues = qa.get("editorial_issues", [])
+          if not isinstance(automatic_issues, list):
+              automatic_issues = []
+          if not isinstance(editorial_issues, list):
+              editorial_issues = []
+          safe_automatic = [x for x in automatic_issues
+                            if isinstance(x, str) and x in allowed_automatic_issues]
+          transport = result.get("model_transport", {})
+          if not isinstance(transport, dict):
+              transport = {}
+          safe_modes = {
+              key: value if isinstance(value, str) and value in {"sse", "json_fallback"} else "unknown"
+              for key, value in (
+                  ("author", transport.get("author")),
+                  ("reviewer", transport.get("reviewer")),
+              )
+          }
+          safe = {
+              "author_transport": safe_modes["author"],
+              "reviewer_transport": safe_modes["reviewer"],
+              "automatic_score": qa.get("score"),
+              "automatic_issue_count": len(automatic_issues),
+              "automatic_issues": safe_automatic,
+              "unclassified_automatic_issue_count": len(automatic_issues) - len(safe_automatic),
+              "editorial_score": qa.get("editorial_score"),
+              "editorial_issue_count": len(editorial_issues),
+              "unsupported_claim_count": sum(
+                  isinstance(x, str) and x.startswith("Unsupported:")
+                  for x in editorial_issues
+              ),
+              "hard_fail": any(
+                  isinstance(x, str) and x.startswith("Hard failure:")
+                  for x in editorial_issues
+              ),
+              "combined_gate_passed": qa.get("passes_automatic_checks") is True,
+          }
+          lines = [
+              "### M7 E2E: sanitized model and QA diagnostics",
+              f"- Author response transport: `{safe['author_transport']}`",
+              f"- Reviewer response transport: `{safe['reviewer_transport']}`",
+              f"- Structural QA score: `{safe['automatic_score']}` / 100",
+              f"- Structural QA issues: `{safe['automatic_issue_count']}`",
+          ]
+          lines.extend(f"  - {issue}" for issue in safe_automatic)
+          lines.extend([
+              f"- Independent editorial score: `{safe['editorial_score']}` / 100",
+              f"- Editorial issue count: `{safe['editorial_issue_count']}`",
+              f"- Unsupported claim count: `{safe['unsupported_claim_count']}`",
+              f"- Hard-fail flag: `{safe['hard_fail']}`",
+              f"- Combined QA gate: `{'PASS' if safe['combined_gate_passed'] else 'FAIL'}`",
+          ])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          print("M7 safe QA diagnostics: " + json.dumps(safe, ensure_ascii=False))
+          if not safe["combined_gate_passed"]:
+              raise SystemExit("Artifact failed automatic checks; see sanitized QA summary above.")
+
+          PY
           python -m overseas_story_producer.cli inspect \
             --input "$artifact" > "$RUNNER_TEMP/m7-inspect-result.json"
           python -m overseas_story_producer.cli submit \

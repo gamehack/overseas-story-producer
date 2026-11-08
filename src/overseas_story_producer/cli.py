@@ -63,6 +63,8 @@ def run(argv: list[str] | None = None) -> dict:
         case = load_case(os.getenv("DATABASE_URL", ""), args.story_id)
         system, prompt = author_prompt(case)
         allow_private_http = os.getenv("OPENAI_COMPAT_ALLOW_PRIVATE_HTTP", "false").strip().lower() in {"1", "true"}
+        author_transport: dict[str, str] = {}
+        reviewer_transport: dict[str, str] = {}
         try:
             model_result = generate_json(
                 system, prompt,
@@ -71,6 +73,7 @@ def run(argv: list[str] | None = None) -> dict:
                 model=os.getenv("OPENAI_COMPAT_MODEL", ""),
                 allow_private_http=allow_private_http,
                 timeout_seconds=model_timeout,
+                transport_info=author_transport,
             )
         except ProductionError as exc:
             raise ProductionError(f"Author stage: {exc}") from None
@@ -85,6 +88,7 @@ def run(argv: list[str] | None = None) -> dict:
                 model=os.getenv("OPENAI_COMPAT_MODEL", ""),
                 allow_private_http=allow_private_http,
                 timeout_seconds=model_timeout,
+                transport_info=reviewer_transport,
             )
         except ProductionError as exc:
             raise ProductionError(f"Reviewer stage: {exc}") from None
@@ -97,7 +101,11 @@ def run(argv: list[str] | None = None) -> dict:
             json.dump(item, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         return {"status": "LOCAL_PENDING_REVIEW", "path": str(args.output),
-                "qa": item["qa"], "notion_title": item["notion_title"]}
+                "qa": item["qa"], "notion_title": item["notion_title"],
+                "model_transport": {
+                    "author": author_transport.get("mode", "unknown"),
+                    "reviewer": reviewer_transport.get("mode", "unknown"),
+                }}
 
     try:
         if args.input.stat().st_size > 100_000:

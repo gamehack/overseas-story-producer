@@ -1,4 +1,4 @@
-"""The two model passes are serialized without automatic retries."""
+"""The two model passes are serialized; only malformed JSON receives one retry."""
 from __future__ import annotations
 
 import pytest
@@ -136,4 +136,34 @@ def test_stage_specific_timeout_does_not_retry(tmp_path, setup_flow, monkeypatch
         _run(tmp_path)
     phases = [event[0] for event in setup_flow]
     assert phases == (["author"] if fail_stage == "author" else ["author", "sleep", "review"])
+    assert not (tmp_path / "story.json").exists()
+
+
+def test_malformed_author_json_retries_once_then_reviews(tmp_path, setup_flow, monkeypatch,
+                                                         model_response, model_review):
+    calls = []
+    def fake_completion(system, user, **kwargs):
+        calls.append(kwargs["model"])
+        if len(calls) == 1:
+            raise ProductionError("Model returned malformed JSON")
+        return model_response if len(calls) == 2 else model_review
+    monkeypatch.setattr(cli, "generate_json", fake_completion)
+    result, output = _run(tmp_path)
+    assert result["status"] == "LOCAL_PENDING_REVIEW"
+    assert output.exists()
+    assert len(calls) == 3
+    assert [event for event in setup_flow if event[0] == "sleep"] == [
+        ("sleep", 90.0), ("sleep", 90.0)]
+
+
+def test_malformed_author_json_twice_is_terminal(tmp_path, setup_flow, monkeypatch):
+    calls = []
+    def malformed(system, user, **kwargs):
+        calls.append(1)
+        raise ProductionError("Model returned malformed JSON")
+    monkeypatch.setattr(cli, "generate_json", malformed)
+    with pytest.raises(ProductionError, match="Author stage: Model returned malformed JSON"):
+        _run(tmp_path)
+    assert len(calls) == 2
+    assert [event for event in setup_flow if event[0] == "sleep"] == [("sleep", 90.0)]
     assert not (tmp_path / "story.json").exists()

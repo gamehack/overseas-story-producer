@@ -105,6 +105,7 @@ jobs:
           print("Malformed JSON candidates quarantined: " + str(result.get("model_rejected", 0)))
           print("Unattempted: " + str(result.get("unattempted", 0)))
           if result["status"] == "PARTIAL_MODEL_REJECTED":
-              print("Some cases remain eligible and must be retried during a future safe batch")\n          if result["status"] == "PARTIAL_TIME_BUDGET":
+              print("Some cases remain eligible and must be retried during a future safe batch")
+          if result["status"] == "PARTIAL_TIME_BUDGET":
               print("More work remains; re-run submit to resume from Notion inventory")
           PY

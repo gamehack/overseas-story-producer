@@ -31,6 +31,8 @@ jobs:
   produce:
     # [backfill] is an explicit one-time owner-authorized push; normal weekly
     # production runs weekly after collector refresh with explicit owner approval.
+    # 2026-11-09 owner-approved incremental continuation: read-only inventory
+    # checks signed Notion UUIDs and serials before any write; retain 01–50.
     if: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'submit')) || (github.event_name == 'workflow_dispatch' && inputs.mode == 'plan') || (github.event_name == 'push' && github.actor == 'gamehack' && contains(github.event.head_commit.message, '[backfill]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350

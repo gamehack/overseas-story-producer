@@ -363,3 +363,28 @@ def test_json_fallback_diagnostic_tracks_bytes_without_exposing_json(capsys):
     assert info["decoded_bytes"] > 0
     assert info["sse_done"] is False
     assert info["outcome"] == "success"
+
+
+def test_sse_stream_handles_utf8_codepoint_and_crlf_split_between_chunks(capsys):
+    import json
+    event = {"choices": [{"delta": {"content": '{"标题":"中文"}'}}]}
+    body = (b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") +
+            b"\r\n\r\n" + b"data: [DONE]\r\n\r\n")
+    split_utf8 = body.index("中".encode("utf-8")) + 1
+    split_crlf = body.index(b"\r\n") + 1
+    assert split_utf8 < split_crlf
+    chunks = [body[:split_utf8], body[split_utf8:split_crlf],
+              body[split_crlf:]]
+    def handler(request):
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                              stream=_ChunkedBody(chunks))
+    result = generate_json("private input", "private input",
+                           api_base="https://model.example.com/v1",
+                           api_key="test-key", model="test-model",
+                           transport=httpx.MockTransport(handler), stage="reviewer")
+    assert result == {"标题": "中文"}
+    info = _last_safe_diagnostic(capsys)
+    assert info["chunks"] == 3
+    assert info["sse_frames"] == 2
+    assert info["sse_done"] is True
+    assert info["outcome"] == "success"

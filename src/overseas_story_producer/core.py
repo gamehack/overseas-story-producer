@@ -194,8 +194,12 @@ def review_score(review: dict[str, Any] | None) -> dict[str, Any]:
 
 def unpack_model_json(text: str) -> dict[str, Any]:
     raw = text.strip()
-    if raw.startswith("```json") and raw.endswith("```"):
-        raw = raw[7:-3].strip()
+    # Accept a complete JSON object inside a plain or JSON-labelled code fence.
+    # Do not repair truncated objects or ignore surrounding commentary.
+    fenced = re.fullmatch(r"```(?:json)?[ \\t]*\\r?\\n(.*?)\\r?\\n```", raw,
+                          flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        raw = fenced.group(1).strip()
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:

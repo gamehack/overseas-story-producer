@@ -26,6 +26,7 @@ class _TransferDiagnostics:
     started: float = field(default_factory=time.monotonic)
     status: int | None = None
     mode: str = "unknown"
+    content_type: str = "unknown"
     chunks: int = 0
     decoded_bytes: int = 0
     sse_frames: int = 0
@@ -54,6 +55,7 @@ class _TransferDiagnostics:
             "outcome": "success" if self.successful else "failed",
             "status": self.status,
             "mode": self.mode,
+            "content_type": self.content_type,
             "elapsed_ms": max(0, int((time.monotonic() - self.started) * 1000)),
             "first_chunk_ms": self.first_chunk_ms,
             "last_chunk_ms": self.last_chunk_ms,
@@ -267,6 +269,9 @@ def generate_json(system: str, user: str, *, api_base: str, api_key: str,
                 if response.status_code != 200:
                     raise ProductionError(f"Model generation failed (HTTP {response.status_code})")
                 content_type = response.headers.get("content-type", "").lower()
+                diag.content_type = ("sse" if "text/event-stream" in content_type else
+                                     "json" if "application/json" in content_type else
+                                     "other" if content_type else "missing")
                 if "text/event-stream" in content_type:
                     diag.mode = "sse"
                     content = _decode_sse_completion(response, diag)

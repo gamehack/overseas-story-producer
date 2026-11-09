@@ -254,6 +254,7 @@ def test_sse_diagnostics_measure_chunks_and_split_crlf_without_logging_content(c
     assert info["stage"] == "reviewer"
     assert info["status"] == 200
     assert info["mode"] == "sse"
+    assert info["content_type"] == "sse"
     assert info["outcome"] == "success"
     assert info["sse_done"] is True
     assert info["sse_frames"] == 2
@@ -357,6 +358,7 @@ def test_json_fallback_diagnostic_tracks_bytes_without_exposing_json(capsys):
     info = _last_safe_diagnostic(capsys)
     assert info["status"] == 200
     assert info["mode"] == "json_fallback"
+    assert info["content_type"] == "json"
     assert info["chunks"] > 0
     assert info["decoded_bytes"] > 0
     assert info["sse_done"] is False

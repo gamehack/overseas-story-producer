@@ -67,6 +67,7 @@ def generate_article(story_id: str, issue_number: str) -> tuple[dict, dict[str, 
                     allow_private_http=allow_private_http,
                     timeout_seconds=model_timeout,
                     transport_info=transport,
+                    stage=stage.lower(),
                 )
             except ProductionError as exc:
                 if str(exc) == "Model returned malformed JSON" and attempt == 0:

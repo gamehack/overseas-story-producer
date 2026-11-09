@@ -211,3 +211,180 @@ def test_malformed_sse_event_is_rejected_without_exposing_payload():
             model="test-model", transport=httpx.MockTransport(handler),
         )
     assert "internal-test-key" not in str(error.value)
+
+
+class _ChunkedBody(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes], *, fail: Exception | None = None):
+        self.chunks = chunks
+        self.fail = fail
+
+    def __iter__(self):
+        yield from self.chunks
+        if self.fail is not None:
+            raise self.fail
+
+    def close(self):
+        pass
+
+
+def _last_safe_diagnostic(capsys) -> dict:
+    import json
+    data = capsys.readouterr().err.strip().splitlines()
+    assert len(data) == 1
+    return json.loads(data[0])
+
+
+def test_sse_diagnostics_measure_chunks_and_split_crlf_without_logging_content(capsys):
+    import json
+    secret = "private-model-message-xyz"
+    event = {"choices": [{"delta": {"content": '{"ok": true}'}}]}
+    body = (b"data: " + json.dumps(event).encode("utf-8") +
+            b"\r\n\r\n: heartbeat\r\n\r\ndata: [DONE]\r\n\r\n")
+    chunks = [body[:9], body[9:15], body[15:31], body[31:43], body[43:]]
+    def handler(request):
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                              stream=_ChunkedBody(chunks))
+
+    result = generate_json(secret, secret, api_base="https://model.example.com/v1",
+                           api_key="secret-key-xyz", model="test-model",
+                           transport=httpx.MockTransport(handler), stage="reviewer")
+    assert result == {"ok": True}
+    info = _last_safe_diagnostic(capsys)
+    assert info["event"] == "model_transport"
+    assert info["stage"] == "reviewer"
+    assert info["status"] == 200
+    assert info["mode"] == "sse"
+    assert info["content_type"] == "sse"
+    assert info["outcome"] == "success"
+    assert info["sse_done"] is True
+    assert info["sse_frames"] == 2
+    assert info["chunks"] == len(chunks)
+    assert info["decoded_bytes"] == len(body)
+    assert 0 <= info["first_chunk_ms"] <= info["last_chunk_ms"] <= info["elapsed_ms"]
+    assert "secret" not in json.dumps(info)
+    assert "private-model-message-xyz" not in json.dumps(info)
+
+
+def test_broken_sse_diagnostics_records_fixed_remote_protocol_type_only(capsys):
+    import json
+    secret = "PRIVATE_TOKEN_WITH_CONTENT_999"
+    body = b'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n'
+    def handler(request):
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"},
+            stream=_ChunkedBody(
+                [body],
+                fail=httpx.RemoteProtocolError("secret exception " + secret,
+                                                request=request),
+            ),
+        )
+    with pytest.raises(ProductionError, match=r"^Model transport failure$"):
+        generate_json(secret, secret, api_base="https://model.example.com/v1",
+                      api_key=secret, model="test-model",
+                      transport=httpx.MockTransport(handler), stage="reviewer")
+    info = _last_safe_diagnostic(capsys)
+    assert info["outcome"] == "failed"
+    assert info["error_class"] == "RemoteProtocolError"
+    assert info["mode"] == "sse"
+    assert info["status"] == 200
+    assert info["chunks"] == 1
+    assert info["decoded_bytes"] == len(body)
+    assert info["sse_done"] is False
+    assert secret not in json.dumps(info)
+
+
+def test_connection_failure_diagnostic_has_no_url_or_secret(capsys):
+    import json
+    secret = "sensitive-header-credential-xyz"
+    def handler(request):
+        raise httpx.ConnectError("Authorization: " + secret, request=request)
+    with pytest.raises(ProductionError, match="^Model transport failure$"):
+        generate_json("system private", "user private",
+                      api_base="https://model.example.com/v1",
+                      api_key=secret, model="test-model",
+                      transport=httpx.MockTransport(handler), stage="author")
+    info = _last_safe_diagnostic(capsys)
+    assert info["error_class"] == "ConnectError"
+    assert info["stage"] == "author"
+    assert info["status"] is None
+    assert info["chunks"] == 0
+    assert info["first_chunk_ms"] is None
+    assert info["outcome"] == "failed"
+    assert secret not in json.dumps(info)
+    assert "model.example.com" not in json.dumps(info)
+    assert "user private" not in json.dumps(info)
+
+
+def test_sse_end_without_done_reports_incomplete_without_leaking_data(capsys):
+    def handler(request):
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                              stream=_ChunkedBody([b'data: {"choices":[]}\n\n']))
+    with pytest.raises(ProductionError, match=r"ended before \[DONE\]"):
+        generate_json("system", "user", api_base="https://model.example.com/v1",
+                      api_key="secret-key", model="test-model", stage="reviewer",
+                      transport=httpx.MockTransport(handler))
+    info = _last_safe_diagnostic(capsys)
+    assert info["outcome"] == "failed"
+    assert info["error_class"] == "ProductionError"
+    assert info["sse_frames"] == 1
+    assert info["sse_done"] is False
+
+
+def test_http_status_diagnostic_does_not_read_upstream_error_body(capsys):
+    import json
+    private = "do-not-log-this-json"
+    def handler(request):
+        return httpx.Response(429, json={"error": private})
+    with pytest.raises(ProductionError, match=r"HTTP 429"):
+        generate_json("system", "user", api_base="https://model.example.com/v1",
+                      api_key="secret-key", model="test-model", stage="author",
+                      transport=httpx.MockTransport(handler))
+    info = _last_safe_diagnostic(capsys)
+    assert info["status"] == 429
+    assert info["chunks"] == 0
+    assert info["error_class"] == "ProductionError"
+    assert private not in json.dumps(info)
+
+
+def test_json_fallback_diagnostic_tracks_bytes_without_exposing_json(capsys):
+    import json
+    def handler(request):
+        return httpx.Response(200, json={"choices": [
+            {"message": {"content": '{"ok": true}'}}]})
+    result = generate_json("system", "user", api_base="https://model.example.com/v1",
+                           api_key="secret-key", model="test-model",
+                           transport=httpx.MockTransport(handler), stage="author")
+    assert result == {"ok": True}
+    info = _last_safe_diagnostic(capsys)
+    assert info["status"] == 200
+    assert info["mode"] == "json_fallback"
+    assert info["content_type"] == "json"
+    assert info["chunks"] > 0
+    assert info["decoded_bytes"] > 0
+    assert info["sse_done"] is False
+    assert info["outcome"] == "success"
+
+
+def test_sse_stream_handles_utf8_codepoint_and_crlf_split_between_chunks(capsys):
+    import json
+    event = {"choices": [{"delta": {"content": '{"标题":"中文"}'}}]}
+    body = (b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") +
+            b"\r\n\r\n" + b"data: [DONE]\r\n\r\n")
+    split_utf8 = body.index("中".encode("utf-8")) + 1
+    split_crlf = body.index(b"\r\n") + 1
+    assert split_utf8 < split_crlf
+    chunks = [body[:split_utf8], body[split_utf8:split_crlf],
+              body[split_crlf:]]
+    def handler(request):
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                              stream=_ChunkedBody(chunks))
+    result = generate_json("private input", "private input",
+                           api_base="https://model.example.com/v1",
+                           api_key="test-key", model="test-model",
+                           transport=httpx.MockTransport(handler), stage="reviewer")
+    assert result == {"标题": "中文"}
+    info = _last_safe_diagnostic(capsys)
+    assert info["chunks"] == 3
+    assert info["sse_frames"] == 2
+    assert info["sse_done"] is True
+    assert info["outcome"] == "success"

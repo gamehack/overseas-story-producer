@@ -6,7 +6,7 @@
 
 ## M8 常规自动生产（周批量生成、每日按序投递）
 
-GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次（晚于采集/索引 03:30），由仓库变量 `M7_PRODUCTION_ENABLED=true` 控制正式定时生产。手动 dispatch 的 `mode=plan` 只读，`mode=submit` 在变量开启后批量生产。业主通过 `[backfill]` 提交标记可一次性触发历史库存回填；普通 push 不发起模型生成。
+GitHub Actions `production.yml` 每周一 **北京时间 06:45** 运行一次（晚于采集/索引 03:30），定时批量生产。手动 dispatch 的 `mode=plan` 只读，`mode=submit` 由操作者明确授权后批量生产。业主通过 `[backfill]` 提交标记可一次性触发历史库存回填；普通 push 不发起模型生成。
 
 1. `overseas-story-producer plan` 读取评分不低于 70、至少有 5 条中文本地化事实、状态不属于 `rejected/handed_off` 的案例；核对正式 Notion 07 一级页所有期号与来源 UUID。排除已生成案例及高置信度同源重复，按优先 UUID、评分和 UUID 稳定排序。一个创业者讲述不同产品/事件不会仅因名字相同被排除。
 2. `overseas-story-producer batch --commit` 将**全部符合条件且未写入的历史/新增案例**依序生成；不限制一周只生产一篇、不依赖过去 7 天的日期窗口、没有两篇待审积压限制。上次失败或部分完成的案例下一次仍可继续处理，缺号、重复期号、无来源 UUID 或存在未签署的正式期号则安全停止。
@@ -57,6 +57,9 @@ overseas-story-producer submit --input outputs/01.json --commit
 - 严重编造包括虚构人物、重大事件、直接引语或收入数字，以及足以改变故事结论的虚构因果/时间线；普通描述偏差（例如太阳能板位置、菜单层级）保留为模型警告。旧手工 `generate/submit` 仍只创建 `PENDING_HUMAN_REVIEW` 的测试产物并可写内部编辑备注；新的正式 `batch --commit` 通过自动审稿后直接签署 READY，不附加内部备注到文章正文。公开 GitHub Actions 日志只暴露数量，不公开全文。
 - 复用现有 OmniRoute 时，为避免首轮生成消耗模型速率预算，首次成功返回后默认等待 **90 秒**再发起独立质检；可通过 `OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS` 配置 0–600 秒（测试可置 0）。这不是重试：任何一次 HTTP 429 / 超时均立即停止，不会自动再次发送请求；需先检查网关限流规则再人工决定是否重新启动。
 - `OPENAI_COMPAT_TIMEOUT_SECONDS` 默认 `120` 秒，可配置 `10`–`300` 秒；分别输出 connect/read/write/pool 超时错误，并标记 author/reviewer 阶段，绝不记录完整请求、URL 或密钥。**此开关不执行任何重试，修改超时前须先核实 OmniRoute 上游超时层级及主机资源；MVP 暂不自行调整现网默认值。**
+
+- **模型传输诊断（2026-11-09）**：Author / Reviewer 每次模型 HTTP 调用在 stderr 输出一条固定结构的 JSON 诊断摘要，字段仅包含阶段（author/reviewer）、结果、HTTP 状态码、Content-Type 分类（sse/json/other/missing）、模型传输模式、总耗时、首个应用层数据块耗时、最后一个数据块耗时、接收的解码后字节数、数据块数、SSE 帧数、是否收到显式 [DONE]、允许列表内的异常类别（例如 RemoteProtocolError、ReadError、ConnectError、ReadTimeout）。**不输出模型请求/回复正文、Prompt、推理内容、URL、Headers、密钥、用户/故事 UUID，也不输出异常消息原文**。首个数据块时间不是底层 TCP 首包时间，也不能独立证明上游完成；HTTP 200 不代表 SSE 完整，只有 [DONE] 可作为当前流完整性标记。
+- **诊断不改变失败处理策略**：HTTP 429、网络错误、超时仍按原有规则失败终止，不自动重试生成或修改 Notion；保留现有 JSON 格式异常的有限重试。运行中的结构化日志可以辅助判别客户端读中断、上游提前结束和 SSE 缺失，但无法凭日志单独确定 Cloudflare 或 Runner 哪一端发起了断开。
 - 自动检查标题、章节、来源、字数、证据 ID、READY 泄漏；模型二次审阅不能替代人工查阅来源或确认版权。
 - 一个不依赖日期的序号（`01`、`02`、...）只对应一个 Notion 子页面；标题为 `海外创业志 01|自然中文人物故事标题`，唯一来源键为 `overseas-stories:01`。故事中包含主来源 URL 与案例/事实 UUID 供溯源。
 - 读取时严格复算 M4 `story_source_hash`、使用只返回最新翻译事实的 `localized_facts` 视图，源数据或翻译过期则拒绝生成。

@@ -7,7 +7,7 @@ import pytest
 
 from overseas_story_producer.core import (
     ProductionError, author_prompt, build_artifact, canonical_issue_number,
-    evaluate, reviewer_prompt, validate_artifact,
+    evaluate, reviewer_prompt, unpack_model_json, validate_artifact,
 )
 
 
@@ -198,3 +198,22 @@ def test_reject_bad_issue_number(issue_number):
 def test_accept_canonical_issue_number(issue_number):
     assert canonical_issue_number(issue_number) == issue_number
 
+
+
+@pytest.mark.parametrize("content", [
+    '```json\\n{"ok": true}\\n```',
+    '```JSON\\n{"ok": true}\\n```',
+    '```\\n{"ok": true}\\n```',
+])
+def test_complete_fenced_model_json_can_be_unwrapped(content):
+    assert unpack_model_json(content) == {"ok": True}
+
+
+@pytest.mark.parametrize("content", [
+    'Model says: {"ok": true}',
+    '{"ok": true} afterword',
+    '{"ok": ',
+])
+def test_malformed_or_truncated_model_json_cannot_be_repaired(content):
+    with pytest.raises(ProductionError, match="malformed JSON"):
+        unpack_model_json(content)

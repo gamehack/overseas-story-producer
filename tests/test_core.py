@@ -201,9 +201,9 @@ def test_accept_canonical_issue_number(issue_number):
 
 
 @pytest.mark.parametrize("content", [
-    '```json\\n{"ok": true}\\n```',
-    '```JSON\\n{"ok": true}\\n```',
-    '```\\n{"ok": true}\\n```',
+    '```json\n{"ok": true}\n```',
+    '```JSON\n{"ok": true}\n```',
+    '```\n{"ok": true}\n```',
 ])
 def test_complete_fenced_model_json_can_be_unwrapped(content):
     assert unpack_model_json(content) == {"ok": True}

@@ -42,42 +42,48 @@ def _model_timeout_seconds() -> float:
 
 
 def generate_article(story_id: str, issue_number: str) -> tuple[dict, dict[str, str]]:
-    """One author+review pair. No network retry or external write."""
+    """Author + independent review, with at most one retry for malformed model JSON.
+
+    A retry cannot publish or write to Notion. Rate limits, transport errors,
+    timeouts and invalid source data remain terminal for this case/run.
+    """
     issue_number = canonical_issue_number(issue_number)
     review_cooldown = _review_cooldown_seconds()
     model_timeout = _model_timeout_seconds()
     case = load_case(os.getenv("DATABASE_URL", ""), story_id)
-    system, prompt = author_prompt(case)
     allow_private_http = os.getenv("OPENAI_COMPAT_ALLOW_PRIVATE_HTTP", "false").strip().lower() in {"1", "true"}
     author_transport: dict[str, str] = {}
     reviewer_transport: dict[str, str] = {}
-    try:
-        model_result = generate_json(
-            system, prompt,
-            api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
-            api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
-            model=os.getenv("OPENAI_COMPAT_MODEL", ""),
-            allow_private_http=allow_private_http,
-            timeout_seconds=model_timeout,
-            transport_info=author_transport,
-        )
-    except ProductionError as exc:
-        raise ProductionError(f"Author stage: {exc}") from None
+
+    def stage_completion(stage: str, system_text: str, user_text: str,
+                         transport: dict[str, str]) -> dict:
+        for attempt in range(2):
+            try:
+                return generate_json(
+                    system_text, user_text,
+                    api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
+                    api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
+                    model=os.getenv("OPENAI_COMPAT_MODEL", ""),
+                    allow_private_http=allow_private_http,
+                    timeout_seconds=model_timeout,
+                    transport_info=transport,
+                )
+            except ProductionError as exc:
+                if str(exc) == "Model returned malformed JSON" and attempt == 0:
+                    # Cool down before a single fresh generation; never attempt
+                    # lossy repairs on truncated or otherwise incomplete JSON.
+                    if review_cooldown:
+                        time.sleep(review_cooldown)
+                    continue
+                raise ProductionError(f"{stage} stage: {exc}") from None
+        raise AssertionError("unreachable model retry state")
+
+    system, prompt = author_prompt(case)
+    model_result = stage_completion("Author", system, prompt, author_transport)
     review_system, review_user = reviewer_prompt(case, model_result)
     if review_cooldown:
         time.sleep(review_cooldown)
-    try:
-        review_result = generate_json(
-            review_system, review_user,
-            api_base=os.getenv("OPENAI_COMPAT_BASE_URL", ""),
-            api_key=os.getenv("OPENAI_COMPAT_API_KEY", ""),
-            model=os.getenv("OPENAI_COMPAT_MODEL", ""),
-            allow_private_http=allow_private_http,
-            timeout_seconds=model_timeout,
-            transport_info=reviewer_transport,
-        )
-    except ProductionError as exc:
-        raise ProductionError(f"Reviewer stage: {exc}") from None
+    review_result = stage_completion("Reviewer", review_system, review_user, reviewer_transport)
     return build_artifact(case, issue_number, model_result, review_result), {
         "author": author_transport.get("mode", "unknown"),
         "reviewer": reviewer_transport.get("mode", "unknown"),
@@ -106,6 +112,7 @@ def run_batch(*, commit: bool, max_minutes: float) -> dict:
     completed = 0
     qa_rejected = 0
     source_rejected = 0
+    model_rejected = 0
     # Do not append failure records or full generated manuscripts to public logs.
     with NotionDraftWriter(os.getenv("NOTION_API_KEY", ""),
                            os.getenv("NOTION_PARENT_PAGE_ID", "")) as notion:
@@ -113,7 +120,8 @@ def run_batch(*, commit: bool, max_minutes: float) -> dict:
             if time.monotonic() - started >= max_minutes * 60:
                 return {**base, "status": "PARTIAL_TIME_BUDGET", "created": completed,
                         "qa_rejected": qa_rejected, "source_rejected": source_rejected,
-                        "unattempted": len(plan["candidates"]) - completed - qa_rejected - source_rejected,
+                        "model_rejected": model_rejected,
+                        "unattempted": len(plan["candidates"]) - completed - qa_rejected - source_rejected - model_rejected,
                         "external_write": True}
             if issue > 99999:
                 raise ProductionError("Series issue number exhausted")
@@ -132,6 +140,13 @@ def run_batch(*, commit: bool, max_minutes: float) -> dict:
                                          "Missing original/translated fact/evidence")):
                     source_rejected += 1
                     continue
+                if str(exc) in ("Author stage: Model returned malformed JSON",
+                                "Reviewer stage: Model returned malformed JSON"):
+                    # Quarantine only this source record for this run.
+                    # The next scheduled plan will include it again, and already
+                    # signed Notion pages remain stable checkpoints.
+                    model_rejected += 1
+                    continue
                 raise
             if not artifact["qa"]["passes_automatic_checks"]:
                 qa_rejected += 1
@@ -141,8 +156,10 @@ def run_batch(*, commit: bool, max_minutes: float) -> dict:
                 raise ProductionError("Automatic READY receipt is incomplete; stop production")
             completed += 1
             issue += 1
-    return {**base, "status": "COMPLETED", "created": completed,
-            "qa_rejected": qa_rejected, "source_rejected": source_rejected, "unattempted": 0,
+    return {**base, "status": "PARTIAL_MODEL_REJECTED" if model_rejected else "COMPLETED",
+            "created": completed,
+            "qa_rejected": qa_rejected, "source_rejected": source_rejected,
+            "model_rejected": model_rejected, "unattempted": 0,
             "last_issue_number": f"{issue - 1:02d}" if completed else None,
             "external_write": True}
 

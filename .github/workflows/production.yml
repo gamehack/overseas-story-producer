@@ -30,8 +30,8 @@ concurrency:
 jobs:
   produce:
     # [backfill] is an explicit one-time owner-authorized push; normal weekly
-    # production still requires the existing repository-level enable switch.
-    if: ${{ (vars.M7_PRODUCTION_ENABLED == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'submit'))) || (github.event_name == 'workflow_dispatch' && inputs.mode == 'plan') || (github.event_name == 'push' && github.actor == 'gamehack' && contains(github.event.head_commit.message, '[backfill]')) }}
+    # production runs weekly after collector refresh with explicit owner approval.
+    if: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'submit')) || (github.event_name == 'workflow_dispatch' && inputs.mode == 'plan') || (github.event_name == 'push' && github.actor == 'gamehack' && contains(github.event.head_commit.message, '[backfill]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     environment: m7-integration

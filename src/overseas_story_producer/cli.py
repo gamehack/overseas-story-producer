@@ -18,7 +18,7 @@ from .source import load_case
 
 def _review_cooldown_seconds() -> float:
     # A successful author response can exhaust a provider's per-minute budget.
-    # Delay the independent review, but never automatically retry a failed call.
+    # Delay independent review; retry only one transient transport failure.
     raw = os.getenv("OPENAI_COMPAT_REVIEW_COOLDOWN_SECONDS", "90").strip()
     try:
         seconds = float(raw)
@@ -44,8 +44,9 @@ def _model_timeout_seconds() -> float:
 def generate_article(story_id: str, issue_number: str) -> tuple[dict, dict[str, str]]:
     """Author + independent review, with at most one retry for malformed model JSON.
 
-    A retry cannot publish or write to Notion. Rate limits, transport errors,
-    timeouts and invalid source data remain terminal for this case/run.
+    A retry cannot publish or write to Notion. A transient transport failure
+    receives one short, bounded reattempt; timeouts, HTTP rate limits, and
+    invalid source data remain terminal for this run.
     """
     issue_number = canonical_issue_number(issue_number)
     review_cooldown = _review_cooldown_seconds()
@@ -70,6 +71,11 @@ def generate_article(story_id: str, issue_number: str) -> tuple[dict, dict[str, 
                     stage=stage.lower(),
                 )
             except ProductionError as exc:
+                if attempt == 0 and str(exc) == "Model transport failure":
+                    # A transient network/stream error (without any Notion write)
+                    # may resolve on one fresh request. Keep retry budget <=2.
+                    time.sleep(3.0)
+                    continue
                 if str(exc) == "Model returned malformed JSON" and attempt == 0:
                     # Cool down before a single fresh generation; never attempt
                     # lossy repairs on truncated or otherwise incomplete JSON.

@@ -1,4 +1,4 @@
-"""The two model passes are serialized; only malformed JSON receives one retry."""
+"""The two model passes are serialized; only malformed JSON or transient transport gets one retry."""
 from __future__ import annotations
 
 import pytest
@@ -167,3 +167,34 @@ def test_malformed_author_json_twice_is_terminal(tmp_path, setup_flow, monkeypat
     assert len(calls) == 2
     assert [event for event in setup_flow if event[0] == "sleep"] == [("sleep", 90.0)]
     assert not (tmp_path / "story.json").exists()
+
+
+def test_transient_transport_failure_retries_once_then_completes(
+        tmp_path,setup_flow,monkeypatch,model_response,model_review):
+    calls=[]
+    def transient(system,user,**kwargs):
+        calls.append(kwargs["stage"])
+        if len(calls)==1:
+            raise ProductionError("Model transport failure")
+        return model_response if len(calls)==2 else model_review
+    monkeypatch.setattr(cli,"generate_json",transient)
+    outcome,output=_run(tmp_path)
+    assert outcome["status"]=="LOCAL_PENDING_REVIEW"
+    assert output.exists()
+    assert calls==["author","author","reviewer"]
+    assert [x for x in setup_flow if x[0]=="sleep"]==[
+        ("sleep",3.0),("sleep",90.0)]
+
+
+def test_double_transport_error_stops_without_notion_or_artifact(
+        tmp_path,setup_flow,monkeypatch):
+    calls=[]
+    def transient(system,user,**kwargs):
+        calls.append(kwargs["stage"])
+        raise ProductionError("Model transport failure")
+    monkeypatch.setattr(cli,"generate_json",transient)
+    with pytest.raises(ProductionError,match="Author stage: Model transport failure"):
+        _run(tmp_path)
+    assert calls==["author","author"]
+    assert [x for x in setup_flow if x[0]=="sleep"]==[("sleep",3.0)]
+    assert not (tmp_path/"story.json").exists()

@@ -99,15 +99,17 @@ jobs:
           python - <<'PY'
           import json, os
           from pathlib import Path
+          from overseas_story_producer.cli import validate_batch_result
+          from overseas_story_producer.core import ProductionError
           result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "production-result.json").read_text())
-          print("Batch status: " + result["status"])
+          try:
+              status = validate_batch_result(result)
+          except ProductionError as exc:
+              raise SystemExit(str(exc))
+          print("Batch status: " + status)
           print("New signed Notion stories: " + str(result.get("created", 0)))
           print("Automatic QA rejected: " + str(result.get("qa_rejected", 0)))
           print("Stale/incomplete source rejected: " + str(result.get("source_rejected", 0)))
           print("Malformed JSON candidates quarantined: " + str(result.get("model_rejected", 0)))
           print("Unattempted: " + str(result.get("unattempted", 0)))
-          if result["status"] == "PARTIAL_MODEL_REJECTED":
-              print("Some cases remain eligible and must be retried during a future safe batch")
-          if result["status"] == "PARTIAL_TIME_BUDGET":
-              print("More work remains; re-run submit to resume from Notion inventory")
           PY

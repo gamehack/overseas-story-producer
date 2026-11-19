@@ -16,6 +16,17 @@ from .notion import NotionDraftWriter
 from .source import load_case
 
 
+def validate_batch_result(result: object) -> str:
+    """Fail closed unless the weekly batch processed every candidate safely."""
+    if not isinstance(result, dict) or "status" not in result:
+        raise ProductionError("invalid batch result")
+    status = result.get("status")
+    if status not in {"COMPLETED", "SKIPPED"}:
+        raise ProductionError(f"Batch did not complete: {status}")
+    return status
+
+
+
 def _review_cooldown_seconds() -> float:
     # A successful author response can exhaust a provider's per-minute budget.
     # Delay independent review; retry only one transient transport failure.
